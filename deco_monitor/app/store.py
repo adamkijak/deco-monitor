@@ -9,6 +9,8 @@ import threading
 import time
 from datetime import datetime
 
+from noise import is_important  # noqa: E402
+
 _DAY_RE = re.compile(r"^deco-(\d{4}-\d{2}-\d{2})\.log$")
 
 
@@ -100,7 +102,8 @@ class Store:
                 out.append(m.group(1))
         return sorted(out, reverse=True)
 
-    def read_log(self, day: str, query: str = "", levels: set | None = None, limit: int = 3000) -> dict:
+    def read_log(self, day: str, query: str = "", levels: set | None = None, limit: int = 3000,
+                 important: bool = False) -> dict:
         path = self.log_path(day)
         if not _DAY_RE.match(os.path.basename(path)) or not os.path.exists(path):
             return {"lines": [], "total": 0, "matched": 0}
@@ -118,6 +121,8 @@ class Store:
                     lvl = _level_of(line)
                     if lvl not in levels:
                         continue
+                if important and not is_important(line):
+                    continue
                 matched.append(line)
         return {"lines": matched[-limit:], "total": total, "matched": len(matched)}
 

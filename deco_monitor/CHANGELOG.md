@@ -1,5 +1,13 @@
 # Zmiany
 
+## 1.2.2
+
+- Log Deco: filtr „tylko err/crit” zastąpiony filtrem **„tylko istotne”**. Deco zapisuje rutynę (DHCP, menedżer
+  klientów, serwer WWW, sterowanie roamingiem) jako `daemon.err`, więc dawny filtr pokazywał prawie wszystko.
+  Teraz zostają wpisy rozpoznawane jako zdarzenia (WAN, internet, smartip, LTE, satelity, WiFi, restart DHCP),
+  urządzenie znikające z sieci (`disconnect_counter` ≥ 3) oraz błędy spoza znanej rutyny. Ten sam filtr jest
+  w logach przy incydentach i zdarzeniach.
+
 ## 1.2.1
 
 - Przy pierwszym starcie usuwane są fałszywe alarmy „masowe rozłączenia WiFi” zapisane przez wersje < 1.2.0

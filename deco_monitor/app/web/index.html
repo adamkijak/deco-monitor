@@ -126,7 +126,7 @@ tr.evr{cursor:pointer}tr.evr:hover td{background:var(--lane)}tr.det td{backgroun
 <section id="tab-log" class="hidden">
   <div class="bar"><select id="day"></select>
     <input type="search" id="q" placeholder="Filtr, np. br-wan, smartip, bedroom…">
-    <label title="Deco oznacza jako err także rutynowe wpisy (DHCP, client_mgmt)"><input type="checkbox" id="onlyerr"> tylko err/crit</label>
+    <label title="Wpisy rozpoznawane jako zdarzenia (WAN, internet, satelity, WiFi…) oraz błędy spoza znanej rutyny. Deco oznacza jako err także zwykłe wpisy DHCP i menedżera klientów – te są ukryte."><input type="checkbox" id="onlyerr"> tylko istotne</label>
     <label><input type="checkbox" id="hidenoise" checked> ukryj szum modemu LTE</label>
     <label><input type="checkbox" id="auto" checked> odświeżaj</label><a id="dl" href="#">pobierz plik</a></div>
   <div class="muted small" id="loginfo" style="margin-bottom:6px"></div>
@@ -371,13 +371,14 @@ function devicesTable(devs){if(!devs||!devs.length)return "";
    <td>${d.wrocil_po_s!=null?`po ${d.wrocil_po_s} s`:d.back_after_s!=null?`po ${d.back_after_s} s`:d.rozlaczenia===undefined
      ?'<span class="muted" title="w chwili zdarzenia jeszcze nie wiadomo – patrz incydent">–</span>':'<span class="muted">nie wrócił w trakcie incydentu</span>'}</td></tr>`).join("")}</tbody></table>`}
 function logBlock(from,to,label){return `<details class="logx" data-from="${from}" data-to="${to}"><summary>${label||"Log Deco z tego okresu"}</summary>
-   <div class="bar small" style="margin:6px 0"><label><input type="checkbox" class="nz"> pokaż szum (modem LTE, IGMP, klucze WiFi)</label>
+   <div class="bar small" style="margin:6px 0"><label><input type="checkbox" class="imp"> tylko istotne</label>
+   <label><input type="checkbox" class="nz"> pokaż szum (modem LTE, IGMP, klucze WiFi)</label>
    <span class="muted cnt"></span></div><pre class="log"></pre></details>`}
 function wireLogBlocks(root){root.querySelectorAll("details.logx").forEach(d=>{if(d.dataset.wired)return;d.dataset.wired=1;
-  const load=async()=>{const r=await get(`api/log_range?from=${d.dataset.from}&to=${d.dataset.to}&noise=${d.querySelector(".nz").checked?1:0}`);
+  const load=async()=>{const r=await get(`api/log_range?from=${d.dataset.from}&to=${d.dataset.to}&noise=${d.querySelector(".nz").checked?1:0}&important=${d.querySelector(".imp").checked?1:0}`);
     d.querySelector(".cnt").textContent=`${r.lines.length} z ${r.total} linii`;
     d.querySelector("pre").innerHTML=r.lines.length?renderLines(r.lines):"Brak linii w archiwum dla tego okresu."};
-  d.addEventListener("toggle",()=>{if(d.open)load()});d.querySelector(".nz").onchange=load})}
+  d.addEventListener("toggle",()=>{if(d.open)load()});d.querySelector(".nz").onchange=load;d.querySelector(".imp").onchange=load})}
 function incidentBody(i){const s=Date.parse(i.start)/1000,e=Date.parse(i.end)/1000;
   return `${(i.effects||[]).length?`<div class="muted" style="margin:2px 0 8px">Skutki: ${esc(i.effects.join("; "))}</div>`:""}
    <div class="zoom"></div>
@@ -451,8 +452,8 @@ function renderLines(lines){return lines.map(l=>{const c=/\.(crit|emerg|alert) /
   return `<span class="${c}${HIT.test(l)?" hit":""}${NOISE.test(l)?" noise":""}">${esc(l)}</span>`}).join("\n")}
 async function logv(){if(!$("#day").options.length)await days();const day=$("#day").value;
   if(!day){$("#log").textContent="Archiwum jest puste – pierwszy zrzut logu pojawi się kilka sekund po starcie.";return}
-  const q=$("#q").value,lv=$("#onlyerr").checked?"err,crit,emerg,alert":"";
-  const r=await get(`api/log?day=${day}&q=${encodeURIComponent(q)}&levels=${lv}&limit=6000`);
+  const q=$("#q").value,imp=$("#onlyerr").checked?1:0;
+  const r=await get(`api/log?day=${day}&q=${encodeURIComponent(q)}&important=${imp}&limit=6000`);
   const hide=$("#hidenoise").checked;const lines=hide?r.lines.filter(l=>!NOISE.test(l)):r.lines;
   $("#dl").href=`api/download?day=${day}`;
   $("#loginfo").textContent=`${r.matched} z ${r.total} linii pasuje${hide?`, po ukryciu szumu LTE: ${lines.length}`:""} (pokazane ostatnie)`;

@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import viz
-from noise import NOISE_RE
+from noise import NOISE_RE, is_important
 
 log = logging.getLogger("webui")
 
@@ -62,7 +62,9 @@ def start_webui(mon, port: int) -> None:
                 if route == "log_range":
                     lines = store.read_range(float(q["from"]), float(q["to"]), 6000)
                     total = len(lines)
-                    if q.get("noise") != "1":
+                    if q.get("important") == "1":
+                        lines = [l for l in lines if is_important(l)]
+                    elif q.get("noise") != "1":
                         lines = [l for l in lines if not NOISE_RE.search(l)]
                     return self._json({"lines": lines, "total": total})
                 if route == "days":
@@ -70,7 +72,8 @@ def start_webui(mon, port: int) -> None:
                 if route == "log":
                     levels = {x for x in q.get("levels", "").split(",") if x} or None
                     return self._json(store.read_log(q.get("day", ""), q.get("q", ""), levels,
-                                                     min(int(q.get("limit", 3000)), 20000)))
+                                                     min(int(q.get("limit", 3000)), 20000),
+                                                     important=q.get("important") == "1"))
                 if route == "events":
                     return self._json(store.events(min(int(q.get("limit", 500)), 5000)))
                 if route == "incidents":

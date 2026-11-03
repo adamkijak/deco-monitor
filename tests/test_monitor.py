@@ -239,6 +239,32 @@ class MigrationTest(unittest.TestCase):
         self.assertTrue(os.path.exists(st.events_path + ".przed-1.2.1"))
 
 
+class ImportantFilterTest(unittest.TestCase):
+    def test_routine_err_hidden_real_events_kept(self):
+        from noise import is_important
+
+        routine = [
+            "Tue Nov  3 20:02:41 2026 daemon.err udhcpd[25822]: Sending ACK to 192.168.68.57",
+            "Tue Nov  3 20:02:41 2026 daemon.err udhcpd[25822]: clear ip 3944a8c0",
+            "Tue Nov  3 20:02:43 2026 daemon.err uhttpd[27483]: uci: Entry not found",
+            "Tue Nov  3 20:02:59 2026 daemon.err udhcpd[25822]: Found static lease: 4144a8c0",
+            "Tue Nov  3 20:03:02 2026 daemon.err client_mgmt: mac 02-00-00-AA-00-01 had uploaded",
+            "Tue Nov  3 20:03:02 2026 daemon.err client_mgmt: client(02-00-00-AA-00-02) not found in arp table "
+            "disconnect_counter=0",
+            "Tue Nov  3 20:04:05 2026 user.warn : [mobile] [GetEventType] qmi_module=1, qmi_msg_id=0x0051",
+        ]
+        important = [
+            "Tue Nov  3 17:09:34 2026 daemon.notice netifd: Network device 'br-wan' link is down",
+            "Tue Nov  3 17:09:37 2026 user.notice smartip: [lan] kill process udhcpd",
+            "Tue Nov  3 17:09:46 2026 user.err : Error: ssh_connect: Timeout connecting to 192.168.71.249",
+            "Tue Nov  3 20:05:00 2026 daemon.err client_mgmt: client(02-00-00-AA-00-02) not found in arp table "
+            "disconnect_counter=4",
+            "Tue Nov  3 20:06:00 2026 daemon.err nieznany: coś nowego się zepsuło",
+        ]
+        self.assertEqual([is_important(l) for l in routine], [False] * len(routine))
+        self.assertEqual([is_important(l) for l in important], [True] * len(important))
+
+
 class MiscTest(unittest.TestCase):
     def test_slugify_like_home_assistant(self):
         self.assertEqual(slugify("Ping Deco główne opóźnienie"), "ping_deco_glowne_opoznienie")

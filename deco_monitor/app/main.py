@@ -38,7 +38,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {

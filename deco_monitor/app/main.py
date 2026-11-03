@@ -11,6 +11,7 @@ Wszystko trafia do HA przez MQTT discovery; incydenty są składane z sygnałów
 
 from __future__ import annotations
 
+import hashlib
 import heapq
 import itertools
 import json
@@ -24,8 +25,9 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dashboard import build_dashboard  # noqa: E402
+from dashboard import build_config, build_dashboard  # noqa: E402
 from deco_api import DecoClient, DecoError, DecoTransientError, b64_name  # noqa: E402
+from ha_ws import HAError, HomeAssistantWS  # noqa: E402
 from incidents import IncidentTracker  # noqa: E402
 from mqtt_pub import Publisher, slugify, supervisor_mqtt  # noqa: E402
 from pinger import Pinger  # noqa: E402
@@ -34,7 +36,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDiffer, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -65,6 +67,13 @@ def load_json(path: str, default):
             return json.load(fh)
     except (OSError, ValueError):
         return default
+
+
+def config_hash(obj) -> str:
+    return hashlib.sha1(json.dumps(obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+DASH_URL = "siec-deco"
 
 
 def save_json(path: str, obj) -> None:
@@ -103,6 +112,7 @@ class Monitor:
 
         self.counters = load_json(os.path.join(self.data_dir, "counters.json"), {})
         self.persist = load_json(os.path.join(self.data_dir, "state.json"), {})
+        self._persist_lock = threading.Lock()
         self.differ.prev_tail = self.persist.get("anchor", [])
         self.differ.prev_len = self.persist.get("anchor_len")
 
@@ -132,6 +142,8 @@ class Monitor:
         self.port_down_since: dict = {}
         self.port_rate_at = 0.0
         self.port_rate_prev: dict = {}
+        self.port_rates: dict = {}
+        self._switch_fails = 0
 
         self.ingress_url = self._ingress_url()
         self._register_static()
@@ -339,7 +351,7 @@ class Monitor:
         new = self.differ.new_lines(lines)
         self.persist["anchor"] = self.differ.prev_tail
         self.persist["anchor_len"] = self.differ.prev_len
-        save_json(os.path.join(self.data_dir, "state.json"), self.persist)
+        self.save_persist()
         self.status.update(deco="OK", syslog_at=datetime.now().isoformat(timespec="seconds"))
         if not new:
             return
@@ -437,10 +449,14 @@ class Monitor:
         try:
             ports = self.switch.read_ports()
         except SwitchError as exc:
-            if self.status.get("switch") != f"błąd: {exc}":
-                log.warning("Switch: %s", exc)
-            self.status["switch"] = f"błąd: {exc}"
+            self._switch_fails += 1
+            if self._switch_fails == 3:  # pojedyncze odrzucenia to norma dla tego switcha
+                log.warning("Switch nie odpowiada (3 odczyty z rzędu): %s", exc)
+                self.status["switch"] = f"błąd: {exc}"
             return
+        if self._switch_fails >= 3:
+            log.info("Switch znów odpowiada")
+        self._switch_fails = 0
         self.status["switch"] = "OK"
         now = time.time()
         reset = False
@@ -480,16 +496,23 @@ class Monitor:
                 self.set(f"port{n}", p["link"], {"opis": self.port_labels.get(n), **p})
                 self.set(f"port{n}_rxbad", p["rx_bad"])
                 if dt and prev_total is not None and total >= prev_total:
-                    self.set(f"port{n}_rate", round((total - prev_total) / dt, 1))
+                    self.port_rates[n] = round((total - prev_total) / dt, 1)
+                    self.set(f"port{n}_rate", self.port_rates[n])
                 self.port_rate_prev[n] = total
             self.port_rate_at = now
 
     def publish_stats(self) -> None:
+        sample = {"t": round(time.time()), "p": {}}
         for key, st in self.pinger.stats(30).items():
             if st["samples"]:
                 if st["avg"] is not None:
                     self.set(f"ping_{key}_rtt", st["avg"])
                 self.set(f"ping_{key}_loss", st["loss"])
+                sample["p"][key] = [st["avg"], st["max"], st["loss"]]
+        for k, short in (("cpu", "cpu"), ("mem", "mem"), ("clients_wifi", "cw"), ("clients_wired", "cl")):
+            if self.values.get(k) is not None:
+                sample[short] = self.values[k]
+        self.store.append_metric(sample)
         self.set("monitor_status", "OK" if self.status.get("deco") == "OK" else "problem",
                  {**self.status, "wersja": VERSION, "encje": len(self.ents)})
 
@@ -497,19 +520,73 @@ class Monitor:
         all_up = all(t.up is not False for t in self.pinger.targets.values())
         self.incidents.tick(all_up)
 
+    def save_persist(self) -> None:
+        with self._persist_lock:
+            save_json(os.path.join(self.data_dir, "state.json"), self.persist)
+
     def _write_dashboard(self) -> None:
         sig = (tuple(sorted(self.nodes)), tuple(sorted(self.ping_meta)), bool(self.switch))
         if sig == self._dash_sig:
             return
         self._dash_sig = sig
         try:
-            yaml_text = build_dashboard(self)
-            path = os.path.join(self.share_dir, "dashboard.yaml")
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(yaml_text)
-            log.info("Zapisano dashboard: %s", path)
+            import yaml
+
+            with open(os.path.join(self.share_dir, "dashboard.yaml"), "w", encoding="utf-8") as fh:
+                fh.write(build_dashboard(self))
+            with open(os.path.join(self.share_dir, "dashboard-wbudowane.yaml"), "w", encoding="utf-8") as fh:
+                fh.write("# Dashboard Deco Monitor tylko z wbudowanymi kartami HA (bez HACS).\n")
+                fh.write(yaml.safe_dump(build_config(self, False), allow_unicode=True, sort_keys=False, width=120))
+            log.info("Zapisano dashboard do %s", self.share_dir)
         except Exception:
             log.exception("Nie udało się wygenerować dashboardu")
+        if self.opts.get("auto_dashboard", True) and os.environ.get("SUPERVISOR_TOKEN"):
+            threading.Thread(target=self.install_dashboard, daemon=True, name="dashboard").start()
+
+    def install_dashboard(self) -> None:
+        """Tworzy/aktualizuje pulpit "Sieć Deco" w HA. Nie nadpisuje zmian zrobionych ręcznie."""
+        if not self.nodes or not (self.opts.get("auto_dashboard", True) and os.environ.get("SUPERVISOR_TOKEN")):
+            return
+        try:
+            with HomeAssistantWS() as ha:
+                try:
+                    resources = ha.call("lovelace/resources") or []
+                except HAError:
+                    resources = []
+                urls = " ".join(str(r.get("url", "")) for r in resources).lower()
+                hacs = "mushroom" in urls and "apexcharts" in urls
+                config = build_config(self, hacs)
+                new_hash = config_hash(config)
+                last_hash = self.persist.get("dashboard_hash")
+                dashes = ha.call("lovelace/dashboards/list") or []
+                if not any(d.get("url_path") == DASH_URL for d in dashes):
+                    ha.call("lovelace/dashboards/create", url_path=DASH_URL, title="Sieć Deco",
+                            icon="mdi:router-network", show_in_sidebar=True, require_admin=False, mode="storage")
+                    log.info("Utworzono pulpit 'Sieć Deco' w pasku bocznym HA")
+                    current = None
+                else:
+                    try:
+                        current = ha.call("lovelace/config", url_path=DASH_URL)
+                    except HAError:
+                        current = None
+                if current:
+                    cur_hash = config_hash(current)
+                    if cur_hash == new_hash:
+                        return
+                    if cur_hash != last_hash:
+                        if not self.persist.get("dashboard_edited_logged"):
+                            log.info("Pulpit 'Sieć Deco' zmieniono ręcznie w HA - dodatek go nie nadpisuje "
+                                     "(usuń pulpit, żeby dodatek utworzył go od nowa)")
+                            self.persist["dashboard_edited_logged"] = True
+                            self.save_persist()
+                        return
+                ha.call("lovelace/config/save", url_path=DASH_URL, config=config)
+                self.persist.update(dashboard_hash=new_hash, dashboard_edited_logged=False)
+                self.save_persist()
+                log.info("Pulpit 'Sieć Deco' zapisany (%s)",
+                         "karty Mushroom + ApexCharts" if hacs else "karty wbudowane - brak Mushroom/ApexCharts w HACS")
+        except Exception as exc:
+            log.warning("Nie udało się utworzyć pulpitu w HA: %s", exc)
 
     def snapshot(self) -> dict:
         pings = {}
@@ -525,7 +602,8 @@ class Monitor:
             "nodes": [{**{k: v for k, v in n.items() if k != "macs"},
                        "radio": self.values.get(f"node_{n['name']}_radio")} for n in self.nodes.values()],
             "pings": pings,
-            "ports": [{**p, "label": self.port_labels.get(n)} for n, p in sorted(self.port_prev.items())],
+            "ports": [{**p, "label": self.port_labels.get(n), "rate": self.port_rates.get(n)}
+                      for n, p in sorted(self.port_prev.items())],
             "counters": self.counters,
             "last_incident": self.values.get("last_incident"),
         }
@@ -550,6 +628,7 @@ class Monitor:
             ("stats", 30, self.publish_stats),
             ("incydenty", 2, self.tick_incidents),
             ("sprzątanie", 6 * 3600, self.store.cleanup),
+            ("pulpit", 3600, self.install_dashboard),  # np. po doinstalowaniu kart z HACS
         ]
         if self.switch:
             loops.append(("switch", float(self.opts.get("switch_interval", 10)), self.poll_switch))

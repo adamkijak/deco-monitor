@@ -1,5 +1,5 @@
 name: Deco Monitor
-version: "1.0.0"
+version: "1.1.0"
 slug: deco_monitor
 description: >-
   Monitoring sieci TP-Link Deco: archiwum syslogu, zdarzenia (zaniki WAN, utrata
@@ -12,6 +12,7 @@ arch:
 init: false
 startup: application
 boot: auto
+homeassistant_api: true  # tworzenie pulpitu "Sieć Deco" (WebSocket API)
 services:
   - mqtt:want
 map:
@@ -54,6 +55,7 @@ options:
       host: 192.168.68.70
       kind: local
   log_retention_days: 30
+  auto_dashboard: true
   log_level: info
 schema:
   deco_host: str
@@ -73,6 +75,7 @@ schema:
       host: str
       kind: list(internet|local|mesh)
   log_retention_days: int(1,365)
+  auto_dashboard: bool
   log_level: list(debug|info|warning)
   mqtt_host: str?
   mqtt_port: port?

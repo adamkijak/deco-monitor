@@ -7,8 +7,8 @@ z jednym zdaniem podsumowania, np.
 
 > 17:09:34 Zanik kabla WAN, 31 s; restart DHCP LAN ×1; na radiu: bedroom; brak pingu: Google DNS, Cloudflare
 
-Encje trafiają do HA przez MQTT discovery, a dodatek generuje gotowy dashboard (Mushroom + ApexCharts)
-i ma własny panel w pasku bocznym z przeglądarką logów.
+Encje trafiają do HA przez MQTT discovery. Dodatek ma własny panel w pasku bocznym (oś czasu zaników, mapa mesh,
+panel switcha, wykresy, przeglądarka logów) i sam tworzy pulpit „Sieć Deco” w HA.
 
 ## Home Assistant OS
 
@@ -42,7 +42,10 @@ deco_monitor/            add-on (kontekst budowania obrazu)
   app/incidents.py       składanie sygnałów w incydenty
   app/mqtt_pub.py        MQTT discovery
   app/dashboard.py       generator dashboardu Lovelace
-  app/webui.py           panel (Ingress)
+  app/webui.py           serwer panelu (Ingress)
+  app/web/index.html     panel: wykresy SVG, bez zewnętrznych bibliotek
+  app/viz.py             dane do wykresów (pasy osi czasu, serie pomiarów)
+  app/ha_ws.py           klient WebSocket API HA (tworzenie pulpitu)
   config.yaml build.yaml Dockerfile run.sh
 tests/                   python3 -m unittest discover tests
 scripts/run_local.sh

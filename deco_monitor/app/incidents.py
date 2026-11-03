@@ -96,7 +96,9 @@ def summarize(inc: dict) -> dict:
         effects.append(f"restart DHCP LAN ×{types.count('lan_dhcp_restart')}")
     if "eth_ports_reset" in tset:
         effects.append("reset portów Ethernet")
-    radio = sorted({i["data"].get("node") for i in items if i["type"] == "backhaul_radio_start"} - {None})
+    # tylko satelity, które zgubiły kabel (te zawsze radiowe mają wagę "warning")
+    radio = sorted({i["data"].get("node") for i in items
+                    if i["type"] == "backhaul_radio_start" and i["severity"] == "problem"} - {None})
     if radio and cause != "Satelita straciła kabel":
         effects.append("na radiu: " + ", ".join(radio))
     unreachable = sorted({i["data"].get("node") for i in items if i["type"] == "mesh_node_unreachable"} - {None})

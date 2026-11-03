@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deco Monitor</title>
+<style>
+:root{
+  --bg:#f3f5f8;--card:#fff;--fg:#18202b;--muted:#687487;--faint:#9aa4b3;--line:#e2e6ec;--lane:#f5f7fa;
+  --ok:#1f9d55;--ok-soft:#dff3e7;--bad:#d64545;--bad-soft:#fbe3e3;--warn:#dd8a12;--warn-soft:#fdf0dc;
+  --info:#3b7bd8;--inc:#a82e2e;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --s1:#3b7bd8;--s2:#16a3a3;--s3:#dd8a12;--s4:#8e63d6;--s5:#d24f8c;--s6:#6f9a1e;--s7:#a0694a;--s8:#2f95d0;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1318;--card:#181d24;--fg:#e5e9f0;--muted:#8e99aa;--faint:#5f6a7a;--line:#29313c;--lane:#1d232b;
+  --ok:#34c172;--ok-soft:#173326;--bad:#ef6464;--bad-soft:#3a1e20;--warn:#f0a43a;--warn-soft:#3a2c17;
+  --info:#5d97ea;--inc:#ff7a7a;
+  --s1:#5d97ea;--s2:#2cc4c4;--s3:#f0a43a;--s4:#a885ea;--s5:#ea6aa6;--s6:#93c23d;--s7:#c48a69;--s8:#55b3e6;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line)}
+.hwrap{max-width:1280px;margin:0 auto;padding:10px 16px 0}
+.title{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+h1{font-size:17px;margin:0}.sub{color:var(--muted);font-size:12.5px}
+nav{display:flex;gap:2px;margin-top:8px;overflow-x:auto}
+nav button{border:0;background:none;color:var(--muted);padding:8px 14px;font:inherit;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+nav button.on{color:var(--fg);border-bottom-color:var(--info);font-weight:600}
+main{max-width:1280px;margin:0 auto;padding:16px}
+section.hidden{display:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+.card h2{font-size:14px;margin:0;font-weight:600}
+.ch{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.muted{color:var(--muted)}.small{font-size:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:14px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;border-left:4px solid var(--faint)}
+.kpi.ok{border-left-color:var(--ok)}.kpi.bad{border-left-color:var(--bad)}.kpi.warn{border-left-color:var(--warn)}
+.kpi .l{color:var(--muted);font-size:12.5px}.kpi .v{font-size:22px;font-weight:650;margin:2px 0}
+.kpi .d{color:var(--muted);font-size:12.5px;min-height:18px}
+.two{display:grid;grid-template-columns:1.1fr 1fr;gap:14px}@media(max-width:900px){.two{grid-template-columns:1fr}}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:none;color:var(--muted);padding:4px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+.seg button.on{background:var(--info);color:#fff}
+svg{display:block;width:100%;overflow:visible}
+svg text{fill:var(--muted);font-size:11px;font-family:inherit}
+svg .lbl{fill:var(--fg);font-size:12px}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.legend button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:none;color:var(--fg);
+  border-radius:999px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}
+.legend button.off{opacity:.4}.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+#tip{position:fixed;z-index:10;pointer-events:none;background:var(--card);color:var(--fg);border:1px solid var(--line);
+  border-radius:8px;padding:6px 9px;font-size:12px;box-shadow:0 6px 20px rgba(0,0,0,.18);max-width:340px;display:none}
+#tip b{font-weight:600}
+.inc-h{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;cursor:pointer;align-items:baseline}
+.inc-h b{font-size:14.5px}
+.tl{margin:10px 0 0;padding:0;list-style:none;border-left:2px solid var(--line)}
+.tl li{padding:2px 0 2px 12px;position:relative}
+.tl li:before{content:"";position:absolute;left:-5px;top:9px;width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.tl li.problem:before{background:var(--bad)}.tl li.warning:before{background:var(--warn)}.tl li.info:before{background:var(--info)}
+.t{font-family:var(--mono);color:var(--muted);margin-right:6px;font-size:12.5px}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--muted);font-size:12.5px}
+.sev{font-size:11.5px;padding:1px 7px;border-radius:6px;white-space:nowrap}
+.sev.problem{background:var(--bad-soft);color:var(--bad)}.sev.warning{background:var(--warn-soft);color:var(--warn)}
+.sev.info{background:color-mix(in srgb,var(--info) 15%,transparent);color:var(--info)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+input,select{font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--fg)}
+input[type=search]{flex:1;min-width:180px}label{white-space:nowrap}
+pre.log{margin:0;font:12px/1.5 var(--mono);white-space:pre-wrap;word-break:break-all;max-height:72vh;overflow:auto}
+pre.log .err{color:var(--bad)}pre.log .warn{color:var(--warn)}pre.log .hit{background:color-mix(in srgb,var(--info) 20%,transparent)}
+pre.log .noise{opacity:.45}
+a{color:var(--info)}.empty{color:var(--muted);padding:18px 0;text-align:center}
+</style>
+</head>
+<body>
+<header><div class="hwrap">
+  <div class="title"><h1>Deco Monitor</h1><span class="sub" id="sub">ładowanie…</span></div>
+  <nav>
+    <button data-tab="ov" class="on">Przegląd</button><button data-tab="ch">Wykresy</button>
+    <button data-tab="inc">Incydenty</button><button data-tab="ev">Zdarzenia</button><button data-tab="log">Log Deco</button>
+  </nav>
+</div></header>
+<main>
+<section id="tab-ov">
+  <div class="kpis" id="kpis"></div>
+  <div class="card">
+    <div class="ch"><h2>Oś czasu</h2><div class="seg" data-range="tl"></div></div>
+    <div id="timeline"></div>
+    <div class="small muted" style="margin-top:6px">Zielony pas = wszystko działało · czerwony = zanik · pomarańczowy = praca awaryjna
+      (np. satelita na radiu zamiast kabla) · kropki = pojedyncze zdarzenia. Najedź, żeby zobaczyć szczegóły.</div>
+  </div>
+  <div class="two">
+    <div class="card"><div class="ch"><h2>Sieć mesh</h2><span class="small muted" id="meshinfo"></span></div><div id="mesh"></div></div>
+    <div class="card"><div class="ch"><h2>Switch</h2><span class="small muted" id="swinfo"></span></div><div id="switch"></div></div>
+  </div>
+  <div class="card" id="lastinc"></div>
+</section>
+
+<section id="tab-ch" class="hidden">
+  <div class="card"><div class="ch"><h2>Opóźnienie ping</h2><div class="seg" data-range="ch"></div></div>
+    <div id="c-rtt"></div><div class="legend" id="lg-rtt"></div></div>
+  <div class="card"><div class="ch"><h2>Strata pakietów</h2><span class="small muted">maksimum w przedziale</span></div>
+    <div id="c-loss"></div></div>
+  <div class="two">
+    <div class="card"><div class="ch"><h2>Główne Deco: CPU i RAM</h2></div><div id="c-sys"></div></div>
+    <div class="card"><div class="ch"><h2>Klienci</h2></div><div id="c-cl"></div></div>
+  </div>
+  <div class="card"><div class="ch"><h2>Problemy dzień po dniu</h2><span class="small muted">ostatnie 14 dni</span></div>
+    <div id="c-daily"></div><div class="legend" id="lg-daily"></div></div>
+</section>
+
+<section id="tab-inc" class="hidden"><div id="incs"></div></section>
+
+<section id="tab-ev" class="hidden">
+  <div class="bar"><select id="evsev"><option value="">wszystkie</option><option value="problem">problemy</option>
+    <option value="warning">ostrzeżenia</option><option value="info">informacje</option></select>
+    <input type="search" id="evq" placeholder="Szukaj w zdarzeniach…"></div>
+  <div class="card"><table><thead><tr><th>Czas</th><th>Waga</th><th>Zdarzenie</th></tr></thead><tbody id="evs"></tbody></table></div>
+</section>
+
+<section id="tab-log" class="hidden">
+  <div class="bar"><select id="day"></select>
+    <input type="search" id="q" placeholder="Filtr, np. br-wan, smartip, bedroom…">
+    <label><input type="checkbox" id="onlyerr"> tylko błędy</label>
+    <label><input type="checkbox" id="hidenoise" checked> ukryj szum modemu LTE</label>
+    <label><input type="checkbox" id="auto" checked> odświeżaj</label><a id="dl" href="#">pobierz plik</a></div>
+  <div class="muted small" id="loginfo" style="margin-bottom:6px"></div>
+  <div class="card"><pre class="log" id="log"></pre></div>
+</section>
+</main>
+<div id="tip"></div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const get=async u=>{const r=await fetch(u,{cache:"no-store"});if(!r.ok)throw new Error(u+" "+r.status);return r.json()};
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const PAL=["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
+const NS="http://www.w3.org/2000/svg";
+const pad2=n=>String(n).padStart(2,"0");
+const hm=t=>{const d=new Date(t*1000);return pad2(d.getHours())+":"+pad2(d.getMinutes())};
+const hms=t=>{const d=new Date(t*1000);return hm(t)+":"+pad2(d.getSeconds())};
+const dm=t=>{const d=new Date(t*1000);return pad2(d.getDate())+"."+pad2(d.getMonth()+1)};
+const dur=s=>s<90?`${Math.round(s)} s`:s<5400?`${Math.round(s/60)} min`:`${(s/3600).toFixed(1)} h`;
+
+/* ---------- tooltip ---------- */
+const tip=$("#tip");
+function showTip(e,html){tip.innerHTML=html;tip.style.display="block";
+  const w=tip.offsetWidth,h=tip.offsetHeight;let x=e.clientX+14,y=e.clientY+14;
+  if(x+w>innerWidth-8)x=e.clientX-w-14;if(y+h>innerHeight-8)y=e.clientY-h-14;tip.style.left=x+"px";tip.style.top=y+"px"}
+const hideTip=()=>tip.style.display="none";
+function svgEl(tag,attrs,parent){const el=document.createElementNS(NS,tag);
+  for(const k in attrs)el.setAttribute(k,attrs[k]);if(parent)parent.appendChild(el);return el}
+function hover(el,html){el.style.cursor="default";el.addEventListener("mousemove",e=>showTip(e,html));el.addEventListener("mouseleave",hideTip)}
+
+/* ---------- zakresy czasu ---------- */
+const RANGES=[[1,"1 h"],[6,"6 h"],[24,"24 h"],[168,"7 dni"]];
+const range={tl:24,ch:24};
+document.querySelectorAll(".seg[data-range]").forEach(seg=>{const k=seg.dataset.range;
+  seg.innerHTML=RANGES.map(([h,l])=>`<button data-h="${h}" class="${h===range[k]?"on":""}">${l}</button>`).join("");
+  seg.onclick=e=>{const b=e.target.closest("button");if(!b)return;range[k]=+b.dataset.h;
+    seg.querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b));refresh()}});
+
+function timeTicks(from,to,width){
+  const span=to-from,steps=[5,10,15,30,60,120,300,600,900,1800,3600,7200,10800,21600,43200,86400];
+  const step=steps.find(s=>span/s<=Math.max(3,width/90))||86400;
+  const off=new Date().getTimezoneOffset()*60;const out=[];
+  for(let t=Math.ceil((from-off)/step)*step+off;t<=to;t+=step)out.push(t);
+  const fmt=step>=86400?dm:step<60?hms:(t=>{const d=new Date(t*1000);return d.getHours()===0&&span>86400?dm(t):hm(t)});
+  return {ticks:out,fmt}}
+
+/* ---------- oś czasu ---------- */
+function drawTimeline(el,data){
+  el.innerHTML="";const W=el.clientWidth||900;const narrow=W<640;
+  const LW=narrow?118:190,RH=narrow?18:20,GAP=6,TOP=4,AX=22;
+  const lanes=data.lanes;const H=TOP+lanes.length*(RH+GAP)+AX;
+  const svg=svgEl("svg",{viewBox:`0 0 ${W} ${H}`,height:H},el);
+  const x0=LW,x1=W-4,X=t=>x0+(t-data.from)/(data.to-data.from)*(x1-x0);
+  const {ticks,fmt}=timeTicks(data.from,data.to,x1-x0);
+  for(const t of ticks){svgEl("line",{x1:X(t),x2:X(t),y1:TOP,y2:H-AX+2,stroke:css("--line")},svg);
+    const tx=svgEl("text",{x:X(t),y:H-6,"text-anchor":"middle"},svg);tx.textContent=fmt(t)}
+  lanes.forEach((ln,i)=>{
+    const y=TOP+i*(RH+GAP);
+    const lab=svgEl("text",{x:0,y:y+RH/2+4,class:"lbl"},svg);
+    let name=ln.name;if(narrow&&name.length>16)name=name.slice(0,15)+"…";lab.textContent=name;
+    const isInc=ln.group==="inc",isDev=ln.group==="dev";
+    svgEl("rect",{x:x0,y,width:x1-x0,height:RH,rx:4,fill:isInc||isDev?css("--lane"):css("--ok-soft")},svg);
+    for(const [s,e,label,sev] of ln.intervals){
+      const a=Math.max(X(s),x0),b=Math.min(X(e),x1);
+      const r=svgEl("rect",{x:a,y,width:Math.max(3,b-a),height:RH,rx:3,
+        fill:isInc?css("--inc"):sev==="warning"?css("--warn"):css("--bad")},svg);
+      hover(r,`<b>${esc(ln.name)}</b><br>${esc(label)}<br>${hms(s)} – ${hms(e)} · <b>${dur(e-s)}</b>`)}
+    for(const [t,label,sev] of ln.points){
+      const c=svgEl("circle",{cx:X(t),cy:y+RH/2,r:narrow?3.5:4.5,fill:sev==="problem"?css("--bad"):css("--warn"),
+        stroke:css("--card"),"stroke-width":1.5},svg);
+      hover(c,`<b>${esc(ln.name)}</b><br>${esc(label)}<br>${hms(t)}`)}
+    if(!ln.intervals.length&&!ln.points.length&&(isInc||isDev)){
+      const tx=svgEl("text",{x:x0+8,y:y+RH/2+4},svg);tx.textContent=isInc?"brak incydentów":"brak zdarzeń"}
+  });
+  if(Date.now()/1000-data.to<90)  // linia "teraz" tylko na bieżącej osi
+    svgEl("line",{x1:x1,x2:x1,y1:TOP-2,y2:H-AX+2,stroke:css("--info"),"stroke-width":1.5},svg);
+}
+
+/* ---------- wykres liniowy z podglądem ---------- */
+function lineChart(el,{from,to,series,unit="",height=220,yMax=null,step=false}){
+  el.innerHTML="";const W=el.clientWidth||900,H=height,L=44,R=8,T=8,B=22;
+  const vis=series.filter(s=>!s.hidden&&s.points.length);
+  if(!vis.length){el.innerHTML=`<div class="empty">Brak danych w tym zakresie – pomiary zapisują się co 30 s od startu dodatku.</div>`;return}
+  let vals=vis.flatMap(s=>s.points.map(p=>p[1]).filter(v=>v!=null)).sort((a,b)=>a-b);
+  let top=yMax??(vals.length?vals[Math.floor(vals.length*0.985)]*1.25:1);top=Math.max(top,unit==="%"?5:1);
+  const raw=top/4,mag=Math.pow(10,Math.floor(Math.log10(raw))),nice=[1,2,2.5,5,10].map(m=>m*mag).find(v=>v>=raw)||mag*10;
+  top=Math.ceil(top/nice-1e-9)*nice;
+  const svg=svgEl("svg",{viewBox:`0 0 ${W} ${H}`,height:H},el);
+  const X=t=>L+(t-from)/(to-from)*(W-L-R),Y=v=>T+(1-Math.min(v,top)/top)*(H-T-B);
+  for(let v=0;v<=top+1e-9;v+=nice){svgEl("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),stroke:css("--line")},svg);
+    const tx=svgEl("text",{x:L-6,y:Y(v)+4,"text-anchor":"end"},svg);tx.textContent=(+v.toFixed(2))+(v===0?"":" "+unit)}
+  const {ticks,fmt}=timeTicks(from,to,W-L-R);
+  for(const t of ticks){const tx=svgEl("text",{x:X(t),y:H-5,"text-anchor":"middle"},svg);tx.textContent=fmt(t)}
+  const gap=Math.max(...vis.map(s=>s.gapAfter||0),0);
+  for(const s of vis){let d="",prev=null;
+    for(const [t,v] of s.points){if(v==null){prev=null;continue}
+      const x=X(t).toFixed(1),y=Y(v).toFixed(1);
+      if(prev===null||(gap&&t-prev>gap))d+=`M${x},${y}`;else d+=step?`H${x}V${y}`:`L${x},${y}`;prev=t}
+    svgEl("path",{d,fill:"none",stroke:s.color,"stroke-width":1.8,"stroke-linejoin":"round"},svg);
+    for(const [t,v] of s.points)if(v!=null&&v>top)svgEl("path",{d:`M${X(t)-3},${T+5}l3,-5l3,5z`,fill:s.color},svg)}
+  const cross=svgEl("line",{y1:T,y2:H-B,stroke:css("--faint"),"stroke-dasharray":"3 3",visibility:"hidden"},svg);
+  const ov=svgEl("rect",{x:L,y:T,width:W-L-R,height:H-T-B,fill:"transparent"},svg);
+  ov.addEventListener("mousemove",e=>{const r=svg.getBoundingClientRect(),px=(e.clientX-r.left)*W/r.width;
+    const t=from+(px-L)/(W-L-R)*(to-from);cross.setAttribute("x1",px);cross.setAttribute("x2",px);cross.setAttribute("visibility","visible");
+    let rows="";for(const s of vis){let best=null;for(const p of s.points)if(best===null||Math.abs(p[0]-t)<Math.abs(best[0]-t))best=p;
+      if(best&&best[1]!=null)rows+=`<div><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${s.color}"></i> ${esc(s.name)}: <b>${best[1]} ${unit}</b>${best[2]!=null&&s.showMax?` <span class="muted">(maks. ${best[2]})</span>`:""}</div>`}
+    showTip(e,`<b>${hm(t)}</b>${rows}`)});
+  ov.addEventListener("mouseleave",()=>{cross.setAttribute("visibility","hidden");hideTip()});
+}
+function legend(el,series,onChange){el.innerHTML="";for(const s of series){const b=document.createElement("button");
+  b.innerHTML=`<i style="background:${s.color}"></i>${esc(s.name)}`;b.className=s.hidden?"off":"";
+  b.onclick=()=>{s.hidden=!s.hidden;b.className=s.hidden?"off":"";onChange()};el.appendChild(b)}}
+
+/* ---------- słupki dzienne ---------- */
+const DAILY=[["incidents","Incydenty","--inc"],["wan_link_down","Zaniki kabla WAN","--bad"],["ping_internet","Zaniki pingu do internetu","--s3"],
+  ["backhaul_radio_start","Satelita na radiu","--s4"],["clients_kicked","Wyrzucenie klientów WiFi","--s5"],["wifi_mass_disconnect","Masowe rozłączenia WiFi","--s2"]];
+const dailyOff=new Set();
+function drawDaily(el,rows){el.innerHTML="";const W=el.clientWidth||900,H=200,L=30,B=22,T=8;
+  const keys=DAILY.filter(k=>!dailyOff.has(k[0]));
+  const tot=rows.map(r=>keys.reduce((a,k)=>a+r[k[0]],0));const top=Math.max(4,...tot);
+  const svg=svgEl("svg",{viewBox:`0 0 ${W} ${H}`,height:H},el);const bw=(W-L)/rows.length;
+  const Y=v=>T+(1-v/top)*(H-T-B);
+  for(let v=0;v<=top;v+=Math.max(1,Math.ceil(top/4))){svgEl("line",{x1:L,x2:W,y1:Y(v),y2:Y(v),stroke:css("--line")},svg);
+    const tx=svgEl("text",{x:L-6,y:Y(v)+4,"text-anchor":"end"},svg);tx.textContent=v}
+  rows.forEach((r,i)=>{let acc=0;const x=L+i*bw+bw*0.18,w=bw*0.64;
+    for(const [k,label,c] of keys){const v=r[k];if(!v)continue;
+      const rect=svgEl("rect",{x,y:Y(acc+v),width:w,height:Y(acc)-Y(acc+v),fill:css(c),rx:2},svg);acc+=v;
+      hover(rect,`<b>${r.day}</b><br>${label}: <b>${v}</b>`)}
+    const tx=svgEl("text",{x:x+w/2,y:H-5,"text-anchor":"middle"},svg);tx.textContent=r.day.slice(8)+"."+r.day.slice(5,7)});
+  const lg=$("#lg-daily");lg.innerHTML="";for(const [k,label,c] of DAILY){const b=document.createElement("button");
+    b.innerHTML=`<i style="background:${css(c)}"></i>${label}`;b.className=dailyOff.has(k)?"off":"";
+    b.onclick=()=>{dailyOff.has(k)?dailyOff.delete(k):dailyOff.add(k);drawDaily(el,rows)};lg.appendChild(b)}}
+
+/* ---------- mapa mesh ---------- */
+function drawMesh(el,s){el.innerHTML="";const W=el.clientWidth||520;
+  const nS=s.nodes.filter(n=>!n.master).length,twoRows=nS>1&&(W-24)/nS<96,H=twoRows?332:300;
+  const svg=svgEl("svg",{viewBox:`0 0 ${W} ${H}`,height:H},el);
+  const master=s.nodes.find(n=>n.master),sats=s.nodes.filter(n=>!n.master);
+  const v=s.values,inetOk=v.internet!==false,wanOk=v.wan_link!==false;
+  const cx=W/2,iy=34,my=128,sy0=H-(twoRows?40:62);
+  const col=n=>!n.online?css("--bad"):(n.wired&&n.radio)?css("--warn"):css("--ok");
+  // internet -> master
+  svgEl("line",{x1:cx,y1:iy+16,x2:cx,y2:my-24,stroke:wanOk&&inetOk?css("--ok"):css("--bad"),"stroke-width":3},svg);
+  const wl=svgEl("text",{x:cx+8,y:(iy+my)/2+4},svg);wl.textContent=wanOk?(inetOk?"WAN":"WAN · brak internetu"):"WAN: brak linku!";
+  if(!wanOk||!inetOk)wl.setAttribute("style",`fill:${css("--bad")};font-weight:600`);
+  const cloud=svgEl("g",{},svg);
+  svgEl("rect",{x:cx-48,y:iy-16,width:96,height:32,rx:16,fill:inetOk?css("--ok-soft"):css("--bad-soft"),stroke:inetOk?css("--ok"):css("--bad")},cloud);
+  const ct=svgEl("text",{x:cx,y:iy+4,"text-anchor":"middle",class:"lbl"},cloud);ct.textContent="Internet";
+  // wąski ekran: dwa rzędy - zewnętrzne satelity wyżej, wewnętrzne niżej (linie przechodzą między ramkami)
+  const top=twoRows?Math.ceil(sats.length/2):sats.length,bot=sats.length-top;
+  const bw=twoRows?Math.min(100,(W-36)/3):Math.min(118,Math.max(84,(W-24)/Math.max(1,sats.length)-12));
+  const posX=i=>{if(!twoRows)return sats.length===1?cx:12+bw/2+i*((W-24-bw)/Math.max(1,sats.length-1));
+    const outer=i%2===0,j=Math.floor(i/2),cnt=outer?top:bot;
+    if(outer)return cnt===1?cx:6+bw/2+j*((W-12-bw)/(cnt-1));
+    return cnt===1?cx:W*0.33+j*(W*0.34/(cnt-1))};
+  const connText=n=>n.wired&&n.radio?"radio!":n.wired?"kabel":(n.signal_dbm!=null?n.signal_dbm+" dBm":"radio");
+  sats.forEach((n,i)=>{const x=posX(i);
+    const sy=twoRows&&i%2===0?sy0-64:sy0;
+    const radio=!n.wired||n.radio;
+    const ln=svgEl("line",{x1:cx,y1:my+24,x2:x,y2:sy-22,stroke:col(n),"stroke-width":radio?2:3.5,"stroke-dasharray":radio?"6 5":""},svg);
+    hover(ln,`<b>${esc(master?.name||"główne")} ↔ ${esc(n.name)}</b><br>${n.wired&&n.radio?"⚠ kabel zgubiony – połączenie przez radio":esc(n.conn)}${n.signal_dbm!=null?`<br>sygnał ${n.signal_dbm} dBm`:""}`);
+    if(!twoRows){  // etykieta tuż nad satelitą (tam linie są już rozsunięte); w dwóch rzędach - w ramce
+      const f=0.78,lx=cx+(x-cx)*f,ly=my+24+(sy-22-my-24)*f;
+      const lt=svgEl("text",{x:lx+(x<cx?-8:x>cx?8:10),y:ly,"text-anchor":x<cx?"end":"start"},svg);
+      lt.textContent=connText(n);
+      if(n.wired&&n.radio)lt.setAttribute("style",`fill:${css("--warn")};font-weight:600`)}
+    node(x,sy,n,false)});
+  if(master)node(cx,my,master,true);
+  function node(x,y,n,isM){const g=svgEl("g",{},svg);const w=isM?132:bw;
+    svgEl("rect",{x:x-w/2,y:y-22,width:w,height:44,rx:10,fill:css("--card"),stroke:col(n),"stroke-width":2},g);
+    svgEl("circle",{cx:x-w/2+11,cy:y,r:4.5,fill:col(n)},g);
+    const max=Math.floor((w-26)/7.2);
+    const t1=svgEl("text",{x:x+6,y:y-3,"text-anchor":"middle",class:"lbl"},g);t1.textContent=n.name.length>max?n.name.slice(0,max-1)+"…":n.name;
+    const t2=svgEl("text",{x:x+6,y:y+12,"text-anchor":"middle"},g);
+    t2.textContent=twoRows&&!isM?`${n.model||""} · ${connText(n)}`:(n.model||"");
+    if(twoRows&&!isM&&n.wired&&n.radio)t2.setAttribute("style",`fill:${css("--warn")};font-weight:600`);
+    hover(g,`<b>${esc(n.name)}</b> · ${esc(n.model)}<br>${esc(n.ip)}<br>${n.online?"online":"<b>offline</b>"} · ${esc(n.conn)}${n.fw?`<br><span class="muted">fw ${esc(n.fw)}</span>`:""}`)}
+  const wired=sats.filter(n=>n.wired).length;$("#meshinfo").textContent=`${s.nodes.length} węzły · ${wired} na kablu`;
+}
+
+/* ---------- przedni panel switcha ---------- */
+function drawSwitch(el,s){el.innerHTML="";const ports=s.ports;
+  if(!ports.length){el.innerHTML=`<div class="empty">Switch nieskonfigurowany (switch_password w opcjach dodatku).</div>`;$("#swinfo").textContent="";return}
+  const W=el.clientWidth||480,n=ports.length,pw=Math.min(52,(W-40)/n-8);
+  const pBottom=44+pw*0.8,labY=pBottom+40,nLeg=W<460?2:1,H=labY+14+12+nLeg*13+6;
+  const svg=svgEl("svg",{viewBox:`0 0 ${W} ${H}`,height:H},el);
+  const total=n*pw+(n-1)*8,x0=(W-total)/2;
+  svgEl("rect",{x:x0-16,y:18,width:total+32,height:pBottom+24-18,rx:10,fill:css("--lane"),stroke:css("--line")},svg);
+  const title=svgEl("text",{x:x0-6,y:34},svg);title.textContent="TL-SG108E";
+  ports.forEach((p,i)=>{const x=x0+i*(pw+8),y=44;
+    const c=!p.up?css("--faint"):p.mbps>=1000?css("--ok"):css("--warn");
+    const g=svgEl("g",{},svg);
+    svgEl("rect",{x,y,width:pw,height:pw*0.8,rx:5,fill:p.up?c:"none",stroke:c,"stroke-width":2,opacity:p.up?.9:.7},g);
+    svgEl("rect",{x:x+pw*0.3,y:y+pw*0.8-6,width:pw*0.4,height:6,fill:css("--lane")},g);
+    const num=svgEl("text",{x:x+pw/2,y:y+pw*0.45,"text-anchor":"middle",style:`fill:${p.up?"#fff":css("--muted")};font-weight:700;font-size:13px`},g);num.textContent=p.port;
+    const sp=svgEl("text",{x:x+pw/2,y:y+pw*0.8+16,"text-anchor":"middle",style:"font-size:10.5px"},g);
+    sp.textContent=p.up?(p.mbps>=1000?"1 G":p.mbps+" M"):"—";
+    const lab=p.label&&!/^port \d$/.test(p.label)?p.label:"";
+    // opis pod portem w dwóch liniach, żeby zmieścić np. "Deco Poddasze"
+    const words=lab.split(/\s+/),maxc=Math.max(5,Math.floor((pw+8)/6));
+    const l1=words[0]||"",l2=words.slice(1).join(" ");
+    [[l1,labY],[l2,labY+12]].forEach(([txt,yy])=>{if(!txt)return;
+      const t=svgEl("text",{x:x+pw/2,y:yy,"text-anchor":"middle",style:"font-size:10.5px"},g);
+      t.textContent=txt.length>maxc?txt.slice(0,maxc-1)+"…":txt});
+    hover(g,`<b>Port ${p.port}</b>${lab?" · "+esc(lab):""}<br>${esc(p.link)}${p.up&&p.mbps<1000?" <span class='muted'>(wolniej niż 1 Gb/s – sprawdź kabel/urządzenie)</span>":""}
+      ${p.rate!=null?`<br>ruch: ${p.rate} pkt/s`:""}<br>błędy RX: ${p.rx_bad.toLocaleString("pl")}<br><span class="muted">RX ${p.rx_good.toLocaleString("pl")} · TX ${p.tx_good.toLocaleString("pl")}</span>`)});
+  const up=ports.filter(p=>p.up).length;
+  const legendTxt=W<460?["zielony = 1 Gb/s · pomarańczowy = 100 Mb/s","szary = brak linku"]:["zielony = 1 Gb/s · pomarańczowy = 100 Mb/s · szary = brak linku"];
+  legendTxt.forEach((t,k)=>{const lg=svgEl("text",{x:W/2,y:labY+12+20+k*13,"text-anchor":"middle"},svg);lg.textContent=t});
+  $("#swinfo").textContent=`${up} z ${ports.length} portów aktywnych`}
+
+/* ---------- przegląd ---------- */
+let S=null,TL=null;
+function kpis(s,daily){const v=s.values,today=daily?.[daily.length-1]||{};
+  const pi=Object.values(s.pings).filter(p=>p.kind==="internet");const anyDown=pi.some(p=>p.up===false);
+  const avg=pi.map(p=>p.avg).filter(x=>x!=null);const lastOut=lastOutage();
+  const k=[
+    {c:v.internet===false||anyDown?"bad":"ok",l:"Internet",v:v.internet===false||anyDown?"brak":"działa",
+     d:lastOut?`ostatni zanik ${lastOut}`:"bez zaników w wybranym zakresie"},
+    {c:v.wan_link===false?"bad":"ok",l:"Kabel WAN",v:v.wan_link===false?"brak linku":"podłączony",d:`zaniki dziś: ${today.wan_link_down??0}${v.wan_ip?` · ${v.wan_ip}`:""}`},
+    {c:v.incident_active?"bad":(today.incidents?"warn":"ok"),l:"Incydenty dziś",v:v.incident_active?"trwa!":String(today.incidents??0),
+     d:s.last_incident?esc(s.last_incident).slice(0,70):"brak"},
+    {c:avg.length&&Math.max(...avg)>100?"warn":"ok",l:"Ping do internetu",v:avg.length?`${(avg.reduce((a,b)=>a+b,0)/avg.length).toFixed(0)} ms`:"–",
+     d:pi.map(p=>`${p.name} ${p.loss??0}% strat`).join(" · ")},
+    {c:"",l:"Główne Deco",v:`CPU ${v.cpu??"–"}%`,d:`RAM ${v.mem??"–"}% · klienci ${v.clients_wifi??"–"} WiFi + ${v.clients_wired??"–"} kabel`},
+  ];
+  $("#kpis").innerHTML=k.map(x=>`<div class="kpi ${x.c}"><div class="l">${x.l}</div><div class="v">${x.v}</div><div class="d">${x.d}</div></div>`).join("")}
+function lastOutage(){if(!TL)return null;let best=null;
+  for(const ln of TL.lanes)if(ln.name==="Internet (Deco)"||ln.name==="Kabel WAN"||(ln.group==="internet"))
+    for(const i of ln.intervals)if(!best||i[0]>best[0])best=i;
+  return best?`${hm(best[0])} (${dur(best[1]-best[0])})`:null}
+/* powiększona oś czasu jednego incydentu (sekunda po sekundzie) */
+async function zoomIncident(el,i){const s=Date.parse(i.start)/1000,e=Date.parse(i.end)/1000,m=Math.max(20,(e-s)*0.15);
+  const tl=await get(`api/timeline?from=${s-m}&to=${e+m}&compact=1`);drawTimeline(el,tl)}
+function incidentBody(i,open){return `${(i.effects||[]).length?`<div class="muted" style="margin:2px 0 8px">Skutki: ${esc(i.effects.join("; "))}</div>`:""}
+   <div class="zoom"></div>
+   <ul class="tl">${i.timeline.map(t=>`<li class="${t.severity}"><span class="t">${t.time}</span>${esc(t.text)}</li>`).join("")}</ul>`}
+let lastIncKey=null;
+async function lastIncident(list){const i=list[0];const el=$("#lastinc");
+  if(!i){el.innerHTML=`<div class="ch"><h2>Ostatni incydent</h2></div><div class="empty">Brak zarejestrowanych incydentów.</div>`;return}
+  const key=i.start+i.summary;if(key===lastIncKey&&el.querySelector(".zoom svg"))return;lastIncKey=key;
+  el.innerHTML=`<div class="ch"><h2>Ostatni incydent: ${esc(i.cause)}</h2><span class="small muted">${esc(i.start.replace("T"," "))} · ${i.duration_s} s</span></div>${incidentBody(i)}`;
+  await zoomIncident(el.querySelector(".zoom"),i)}
+
+async function overview(){const [s,tl,dl,inc]=await Promise.all([get("api/status"),get(`api/timeline?hours=${range.tl}`),get("api/daily?days=14"),get("api/incidents?limit=1")]);
+  S=s;TL=tl;kpis(s,dl);drawTimeline($("#timeline"),tl);drawMesh($("#mesh"),s);drawSwitch($("#switch"),s);lastIncident(inc)}
+
+/* ---------- wykresy ---------- */
+let rttSeries=null;
+async function charts(){const [s,m,dl]=await Promise.all([get("api/status"),get(`api/metrics?hours=${range.ch}`),get("api/daily?days=14")]);S=s;
+  const keys=Object.keys(s.pings);const prev=new Map((rttSeries||[]).map(x=>[x.key,x.hidden]));
+  rttSeries=keys.map((k,i)=>({key:k,name:s.pings[k].name,color:css(PAL[i%PAL.length]),hidden:prev.has(k)?prev.get(k):s.pings[k].kind==="mesh",
+    showMax:true,gapAfter:m.bucket*3,points:(m.ping[k]||[]).map(p=>[p[0],p[1],p[2]])}));
+  const draw=()=>{lineChart($("#c-rtt"),{from:m.from,to:m.to,series:rttSeries,unit:"ms"});
+    lineChart($("#c-loss"),{from:m.from,to:m.to,unit:"%",height:150,yMax:100,step:true,
+      series:rttSeries.map(x=>({...x,showMax:false,points:(m.ping[x.key]||[]).map(p=>[p[0],p[3]])}))})};
+  legend($("#lg-rtt"),rttSeries,draw);draw();
+  lineChart($("#c-sys"),{from:m.from,to:m.to,unit:"%",yMax:100,height:180,series:[
+    {name:"CPU",color:css("--s1"),points:m.sys.cpu,gapAfter:m.bucket*3},{name:"RAM",color:css("--s4"),points:m.sys.mem,gapAfter:m.bucket*3}]});
+  lineChart($("#c-cl"),{from:m.from,to:m.to,height:180,series:[
+    {name:"WiFi",color:css("--s2"),points:m.sys.cw,gapAfter:m.bucket*3},{name:"kabel",color:css("--s3"),points:m.sys.cl,gapAfter:m.bucket*3}]});
+  drawDaily($("#c-daily"),dl)}
+
+/* ---------- incydenty, zdarzenia, log ---------- */
+let incList=[],incOpen=new Set();
+async function incs(){const list=await get("api/incidents?limit=200");const box=$("#incs");
+  const sig=list.map(i=>i.start).join();if(sig===box.dataset.sig)return;box.dataset.sig=sig;incList=list;
+  if(!incOpen.size&&list[0])incOpen.add(list[0].start);
+  box.innerHTML=list.length?list.map((i,k)=>`<div class="card" data-k="${k}"><div class="inc-h"><b>${esc(i.cause)}</b>
+   <span class="muted">${esc(i.start.replace("T"," "))} · ${i.duration_s} s</span></div>
+   <div class="body ${incOpen.has(i.start)?"":"hidden"}">${incidentBody(i)}</div></div>`).join("")
+   :`<div class="card empty">Brak zarejestrowanych incydentów.</div>`;
+  box.querySelectorAll(".card[data-k]").forEach(c=>{const i=list[+c.dataset.k],body=c.querySelector(".body");
+    const load=()=>{if(!body.querySelector(".zoom svg"))zoomIncident(body.querySelector(".zoom"),i)};
+    if(!body.classList.contains("hidden"))load();
+    c.querySelector(".inc-h").onclick=()=>{body.classList.toggle("hidden");
+      body.classList.contains("hidden")?incOpen.delete(i.start):(incOpen.add(i.start),load())}})}
+async function evs(){const sev=$("#evsev").value,q=$("#evq").value.toLowerCase();let list=await get("api/events?limit=3000");
+  list=list.filter(e=>(!sev||e.severity===sev)&&(!q||(e.message+e.type).toLowerCase().includes(q))).slice(0,600);
+  $("#evs").innerHTML=list.length?list.map(e=>`<tr><td class="t">${esc(e.time.replace("T"," "))}</td><td><span class="sev ${e.severity}">${e.severity}</span></td>
+   <td>${esc(e.message)}${e.historyczne?' <span class="muted small">(z bufora przy starcie)</span>':""}</td></tr>`).join("")
+   :`<tr><td colspan="3" class="empty">Brak zdarzeń.</td></tr>`}
+async function days(){const d=await get("api/days");const sel=$("#day"),cur=sel.value;
+  sel.innerHTML=d.map(x=>`<option>${x}</option>`).join("");if(cur&&d.includes(cur))sel.value=cur}
+const NOISE=/\[mobile\]|simplecom/;const HIT=/br-wan|conn-indicator|smartip|mobile_backup|ssh_connect|AP-STA-|Lease of/;
+async function logv(){if(!$("#day").options.length)await days();const day=$("#day").value;
+  if(!day){$("#log").textContent="Archiwum jest puste – pierwszy zrzut logu pojawi się kilka sekund po starcie.";return}
+  const q=$("#q").value,lv=$("#onlyerr").checked?"err,crit,emerg,alert":"";
+  const r=await get(`api/log?day=${day}&q=${encodeURIComponent(q)}&levels=${lv}&limit=6000`);
+  const hide=$("#hidenoise").checked;const lines=hide?r.lines.filter(l=>!NOISE.test(l)):r.lines;
+  $("#dl").href=`api/download?day=${day}`;
+  $("#loginfo").textContent=`${r.matched} z ${r.total} linii pasuje${hide?`, po ukryciu szumu LTE: ${lines.length}`:""} (pokazane ostatnie)`;
+  const pre=$("#log"),atEnd=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-20;
+  pre.innerHTML=lines.map(l=>{const c=/\.(err|crit|emerg|alert) /.test(l)?"err":/\.warn /.test(l)?"warn":"";
+    return `<span class="${c}${HIT.test(l)?" hit":""}${NOISE.test(l)?" noise":""}">${esc(l)}</span>`}).join("\n");
+  if(atEnd)pre.scrollTop=pre.scrollHeight}
+
+/* ---------- nawigacja ---------- */
+let tab="ov";
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{tab=b.dataset.tab;
+  document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));
+  document.querySelectorAll("main section").forEach(s=>s.classList.toggle("hidden",s.id!=="tab-"+tab));refresh()});
+async function header(){const s=S||await get("api/status");
+  $("#sub").textContent=`v${s.version} · API Deco: ${s.status.deco}${s.status.switch?` · switch: ${s.status.switch}`:""}${s.status.syslog_at?` · log ${s.status.syslog_at.slice(11)}`:""}`}
+let busy=false;
+async function refresh(){if(busy)return;busy=true;try{
+  if(tab==="ov")await overview();else if(tab==="ch")await charts();else if(tab==="inc")await incs();
+  else if(tab==="ev")await evs();else if(tab==="log")await logv();await header()}
+  catch(e){console.error(e);$("#sub").textContent="błąd: "+e.message}finally{busy=false}}
+["#evsev","#evq"].forEach(s=>$(s).oninput=evs);["#day","#onlyerr","#hidenoise"].forEach(s=>$(s).onchange=logv);
+let qt;$("#q").oninput=()=>{clearTimeout(qt);qt=setTimeout(logv,300)};
+let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(refresh,200)});
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",refresh);
+setInterval(()=>{if(document.hidden)return;if(tab!=="log"||$("#auto").checked)refresh()},15000);
+refresh();
+</script>
+</body>
+</html>

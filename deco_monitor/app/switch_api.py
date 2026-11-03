@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.cookiejar
 import re
 import threading
+import time
 import urllib.parse
 import urllib.request
 
@@ -77,12 +78,17 @@ class EasySmartSwitch:
     def read_ports(self) -> list:
         """Lista portów: {port, enabled, link_code, link, mbps, tx_good, tx_bad, rx_good, rx_bad}."""
         with self._lock:
-            try:
-                stats = self._page("PortStatisticsRpm")
-            except SwitchError:
-                # serwer WWW switcha bywa przeciążony i zrywa połączenie - jedna ponowna próba
-                self._logged_in = False
-                stats = self._page("PortStatisticsRpm")
+            # serwer WWW switcha jest słaby: zrywa połączenia, gdy dostaje kilka żądań naraz
+            # (np. ktoś ma otwarty jego panel) - do 3 prób z przerwą
+            for attempt in range(3):
+                try:
+                    stats = self._page("PortStatisticsRpm")
+                    break
+                except SwitchError:
+                    if attempt == 2:
+                        raise
+                    self._logged_in = False
+                    time.sleep(1.0 + attempt)
         state = stats.get("state", [])
         link = stats.get("link_status", [])
         pkts = stats.get("pkts", [])

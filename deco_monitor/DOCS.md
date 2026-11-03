@@ -47,7 +47,8 @@ jest w atrybucie `czas`.
 ## Wymagania
 
 1. **Broker MQTT** – dodatek *Mosquitto broker* + integracja MQTT (dodatek sam pobiera dane logowania).
-2. Dla dashboardu: z **HACS** karty **Mushroom** i **ApexCharts Card**.
+2. Opcjonalnie, dla ładniejszego pulpitu HA: z **HACS** karty **Mushroom** i **ApexCharts Card**
+   (panel dodatku ich nie potrzebuje).
 
 ## Instalacja
 
@@ -70,7 +71,8 @@ potem Uruchom. Jeśli używasz starego dodatku *Deco Syslog Bridge* – odinstal
 | `ping_interval` | Co ile sekund pingować (zanik = 2 kolejne pingi bez odpowiedzi). |
 | `ping_targets` | Cele pingu: `name`, `host`, `kind` (`internet` / `local` / `mesh`). |
 | `ping_mesh_nodes` | Automatycznie pinguj wszystkie satelity Deco (adresy z API). |
-| `log_retention_days` | Ile dni trzymać archiwum logów. |
+| `log_retention_days` | Ile dni trzymać archiwum logów i historii pomiarów. |
+| `auto_dashboard` | Sam twórz i aktualizuj pulpit „Sieć Deco” w HA. |
 | `mqtt_*` | Tylko gdy broker MQTT nie jest dodatkiem HA. |
 
 ## Encje
@@ -97,21 +99,36 @@ recorder:
       - sensor.deco_monitor_log_ostatnie_linie
 ```
 
-## Dashboard
+## Wizualizacja
 
-Po starcie dodatek zapisuje gotowy dashboard z prawdziwymi nazwami encji do
-`/share/deco_monitor/dashboard.yaml` (odświeża go, gdy dojdzie węzeł albo cel pingu).
+Dwa miejsca, oba pojawiają się same po starcie dodatku:
 
-Ustawienia → Pulpity → Dodaj pulpit → Nowy pulpit od zera → otwórz go → ✏️ → ⋮ → **Edytor kodu** → wklej
-zawartość pliku. Plik otworzysz np. dodatkiem *File editor* / *Studio Code Server* albo przez Sambę (`share`).
+**1. Panel „Deco Monitor” w pasku bocznym** – działa od razu, bez HACS i bez konfiguracji:
 
-Widoki: **Przegląd** (stan, ostatni incydent, węzły, pingi, oś czasu 24 h, dziennik), **Wykresy** (opóźnienia,
-straty, CPU/RAM, problemy dziennie), **Switch** (porty, link, ruch, błędy) i **Log** (ostatnie linie + link do panelu).
+- **Przegląd**: kafelki stanu (internet, kabel WAN, incydenty dziś, ping, obciążenie Deco), **oś czasu**
+  (1 h / 6 h / 24 h / 7 dni) z pasami dla internetu, kabla WAN, każdego pingu, każdej satelity i portów switcha –
+  zielony = działa, czerwony = zanik, pomarańczowy = praca awaryjna (np. satelita na radiu zamiast kabla);
+  **mapa mesh** (kabel = linia ciągła, radio = przerywana, kolor = stan), **przedni panel switcha**
+  (kolor = prędkość linku) i **ostatni incydent z powiększoną osią czasu** sekunda po sekundzie.
+- **Wykresy**: opóźnienie ping z podglądem wartości pod kursorem, strata pakietów, CPU/RAM Deco, liczba klientów,
+  problemy dzień po dniu (14 dni).
+- **Incydenty** (każdy z własną powiększoną osią czasu), **Zdarzenia** (filtr, wyszukiwanie), **Log Deco**
+  (archiwum: wybór dnia, wyszukiwanie, „tylko błędy”, „ukryj szum modemu LTE”, pobieranie pliku).
 
-## Panel dodatku
+Historia pomiarów do wykresów zapisuje się co 30 s w `/share/deco_monitor/metrics/` – wykresy zapełniają się
+od chwili instalacji.
 
-**Deco Monitor** w pasku bocznym: lista incydentów z osią czasu, wszystkie zdarzenia z filtrem, przeglądarka
-archiwum logów (wybór dnia, wyszukiwanie, tylko błędy, pobieranie pliku) i bieżący stan sieci.
+**2. Pulpit „Sieć Deco” w Home Assistant** – dodatek tworzy go sam (opcja `auto_dashboard`, domyślnie włączona):
+
+- z kartami **Mushroom** i **ApexCharts Card**, jeśli są zainstalowane z HACS,
+- w przeciwnym razie z kartami wbudowanymi HA (bez czerwonych błędów „Custom element doesn't exist”);
+  po doinstalowaniu kart z HACS pulpit sam przełączy się na ładniejszą wersję (sprawdza co godzinę).
+
+Jeśli zmienisz pulpit ręcznie, dodatek go już nie nadpisze. Żeby wrócić do wersji z dodatku – usuń pulpit
+(Ustawienia → Pulpity), a dodatek utworzy go od nowa w ciągu godziny (albo po restarcie dodatku).
+
+Ten sam pulpit jest też w plikach `/share/deco_monitor/dashboard.yaml` (HACS) i `dashboard-wbudowane.yaml` –
+do ręcznego wklejenia w edytorze kodu pulpitu.
 
 ## Powiadomienia
 

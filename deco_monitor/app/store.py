@@ -20,6 +20,8 @@ class Store:
         self.retention_days = retention_days
         self.events_path = os.path.join(root, "events.jsonl")
         self.incidents_path = os.path.join(root, "incidents.jsonl")
+        self.metrics_dir = os.path.join(root, "metrics")
+        os.makedirs(self.metrics_dir, exist_ok=True)
         self._lock = threading.Lock()
 
     # -- surowy log --------------------------------------------------------
@@ -99,9 +101,49 @@ class Store:
     def incidents(self, limit: int = 200) -> list:
         return self._tail_jsonl(self.incidents_path, limit)
 
+    def events_since(self, since_ts: float) -> list:
+        """Zdarzenia od podanego czasu, chronologicznie."""
+        since = datetime.fromtimestamp(since_ts).isoformat(timespec="seconds")
+        return [e for e in reversed(self.events(200000)) if e.get("time", "") >= since]
+
+    def incidents_since(self, since_ts: float) -> list:
+        since = datetime.fromtimestamp(since_ts).isoformat(timespec="seconds")
+        return [i for i in reversed(self.incidents(20000)) if i.get("end", "") >= since]
+
+    # -- pomiary (do wykresów w panelu) -------------------------------------------
+    def append_metric(self, sample: dict) -> None:
+        day = datetime.fromtimestamp(sample["t"]).strftime("%Y-%m-%d")
+        path = os.path.join(self.metrics_dir, f"metrics-{day}.jsonl")
+        with self._lock, open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(sample, separators=(",", ":")) + "\n")
+
+    def metrics_since(self, since_ts: float) -> list:
+        out = []
+        day = datetime.fromtimestamp(since_ts).replace(hour=0, minute=0, second=0, microsecond=0)
+        while day.timestamp() <= time.time():
+            path = os.path.join(self.metrics_dir, f"metrics-{day:%Y-%m-%d}.jsonl")
+            if os.path.exists(path):
+                with self._lock, open(path, encoding="utf-8") as fh:
+                    for line in fh:
+                        try:
+                            m = json.loads(line)
+                        except ValueError:
+                            continue
+                        if m.get("t", 0) >= since_ts:
+                            out.append(m)
+            day = datetime.fromtimestamp(day.timestamp() + 86400 + 3600).replace(hour=0)
+        return out
+
     # -- sprzątanie ------------------------------------------------------------
     def cleanup(self) -> None:
         cutoff = time.time() - self.retention_days * 86400
+        for name in os.listdir(self.metrics_dir):
+            m = re.match(r"^metrics-(\d{4}-\d{2}-\d{2})\.jsonl$", name)
+            try:
+                if m and datetime.strptime(m.group(1), "%Y-%m-%d").timestamp() < cutoff:
+                    os.remove(os.path.join(self.metrics_dir, name))
+            except OSError:
+                pass
         for day in self.days():
             try:
                 if datetime.strptime(day, "%Y-%m-%d").timestamp() < cutoff:

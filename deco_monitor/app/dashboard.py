@@ -40,7 +40,46 @@ def _apex(title: str, series: list, span: str = "24h", group: str = "5min", func
     return card
 
 
+LONG_TEXT = ("last_incident", "last_event")
+
+
+def to_builtin(card: dict, long_text: set) -> dict:
+    """Zamienia karty z HACS na wbudowane odpowiedniki (gdy Mushroom/ApexCharts nie są zainstalowane)."""
+    t = card.get("type", "")
+    if "cards" in card:
+        return {**card, "cards": [to_builtin(c, long_text) for c in card["cards"]]}
+    if t == "custom:mushroom-chips-card":
+        tiles = [{"type": "tile", "entity": c["entity"], **({"name": c["content"]} if "{{" not in str(c.get("content", ""))
+                                                              and c.get("content") else {})}
+                 for c in card["chips"] if c.get("entity")]
+        return {"type": "grid", "columns": 4, "square": False, "cards": tiles}
+    if t == "custom:mushroom-template-card":
+        if card.get("entity") and card["entity"] not in long_text:
+            return {"type": "tile", "entity": card["entity"], "name": card["primary"]}
+        return {"type": "markdown", "content": f"**{card['primary']}**\n\n{card['secondary']}"}
+    if t == "custom:apexcharts-card":
+        return {"type": "history-graph", "title": card["header"]["title"], "hours_to_show": 24,
+                "entities": [{"entity": s["entity"], "name": s["name"]} for s in card["series"]]}
+    return card
+
+
 def build_dashboard(mon) -> str:
+    """YAML do ręcznego wklejenia (wariant z kartami z HACS)."""
+    header = ("# Dashboard wygenerowany przez dodatek Deco Monitor.\n"
+              "# Wymaga kart z HACS: Mushroom, ApexCharts Card (wersja bez nich: dashboard-wbudowane.yaml).\n"
+              "# Ustawienia > Pulpity > Dodaj pulpit > Nowy od zera > ⋮ > Edytor kodu (raw) > wklej.\n")
+    return header + yaml.safe_dump(build_config(mon, True), allow_unicode=True, sort_keys=False, width=120)
+
+
+def build_config(mon, hacs: bool) -> dict:
+    cfg = _build(mon)
+    if hacs:
+        return cfg
+    long_text = {mon.ents[k] for k in LONG_TEXT if k in mon.ents}
+    return {**cfg, "views": [{**v, "cards": [to_builtin(c, long_text) for c in v["cards"]]} for v in cfg["views"]]}
+
+
+def _build(mon) -> dict:
     e = mon.ents
     has = e.__contains__
 
@@ -125,6 +164,9 @@ def build_dashboard(mon) -> str:
         "icon": "mdi:router-network",
         "cards": [
             {"type": "vertical-stack", "cards": [
+                {"type": "markdown", "content":
+                    f"📊 **Oś czasu zaników, mapa mesh, switch i archiwum logów:** "
+                    f"[otwórz panel Deco Monitor]({getattr(mon, 'ingress_url', '/hassio/ingress/local_deco_monitor')})"},
                 {"type": "custom:mushroom-chips-card", "chips": chips},
                 incident_card,
                 event_card,
@@ -208,8 +250,4 @@ def build_dashboard(mon) -> str:
         ]}],
     })
 
-    dash = {"title": "Sieć Deco", "views": views}
-    header = ("# Dashboard wygenerowany przez dodatek Deco Monitor.\n"
-              "# Wymaga kart z HACS: Mushroom, ApexCharts Card.\n"
-              "# Ustawienia > Pulpity > Dodaj pulpit > Nowy od zera > ⋮ > Edytor kodu (raw) > wklej.\n")
-    return header + yaml.safe_dump(dash, allow_unicode=True, sort_keys=False, width=120)
+    return {"title": "Sieć Deco", "views": views}

@@ -7,6 +7,7 @@ Reguły są oparte na prawdziwych wpisach z Deco X50-4G (fw 1.2.0) i X50
 from __future__ import annotations
 
 import re
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -65,6 +66,7 @@ EVENT_TYPES = [
     "backhaul_radio_start",
     "backhaul_radio_end",
     "wifi_mass_disconnect",
+    "wifi_client_flapping",
     "router_boot",
     # spoza logu
     "ping_down",
@@ -100,8 +102,13 @@ def mac_tail(mac: str) -> str:
     return ":".join(parts[-5:]) if len(parts) == 6 else ""
 
 
+BANDS = {"ath0": "2,4 GHz", "ath1": "5 GHz", "ath2": "5 GHz-2", "ath3": "6 GHz"}
+
+
 class LogAnalyzer:
     """Zamienia linie logu na zdarzenia. Trzyma mały stan (deduplikacja)."""
+
+    MASS_DEVICES = 5  # tyle różnych urządzeń rozłączonych w 60 s = masowe rozłączenie
 
     def __init__(self):
         # mac_tail -> {"name":..., "wired": bool}
@@ -115,6 +122,15 @@ class LogAnalyzer:
         self.radio_backhaul: dict = {}  # nazwa -> bool (aktywny backhaul radiowy z logu)
         self._sta_last: dict = {}  # (nazwa, akcja) -> czas
         self._failover_at: datetime | None = None
+        self.client_names: dict = {}  # mac (aa:bb:..) -> nazwa z aplikacji Deco
+        self._last_disc: dict = {}  # mac -> czas rozłączenia (do "wrócił po N s")
+        self._disc_win: list = []  # (czas, mac, info) z ostatnich 60 s
+        self._flap: dict = {}  # mac -> [czasy rozłączeń z 10 min]
+        self._flap_last: dict = {}
+
+    def update_clients(self, clients: dict) -> None:
+        """clients: {mac w dowolnym formacie: nazwa}"""
+        self.client_names = {m.lower().replace("-", ":"): n for m, n in clients.items() if m}
 
     def update_nodes(self, nodes: list) -> None:
         """nodes: [{"name", "ip", "macs": [...], "wired": bool, "master": bool}]"""
@@ -209,57 +225,144 @@ class LogAnalyzer:
                                      data={"node": name, "iface": iface},
                                      states={f"radio_backhaul:{name}": False}))
             else:
-                if action == "CONNECTED":
-                    out.append(Event("_wifi_connect", "", t, counters=("wifi_connects",)))
-                else:
-                    out.append(Event("_wifi_disconnect", "", t, counters=("wifi_disconnects",)))
-                    self._disc_times = [x for x in self._disc_times if (t - x).total_seconds() <= 60] + [t]
-                    if len(self._disc_times) >= 6 and (
-                        self._mass_last is None or (t - self._mass_last).total_seconds() > 120
-                    ):
-                        self._mass_last = t
-                        out.append(Event("wifi_mass_disconnect",
-                                         f"Masowe rozłączenia WiFi: {len(self._disc_times)} urządzeń w 60 s",
-                                         t, "problem", counters=("wifi_mass_disconnects",)))
+                out += self._client_event(iface, action, mac.lower(), t)
         elif _R["boot"].search(msg):
             out.append(Event("router_boot", "Główne Deco uruchomiło się ponownie", t, "problem",
                              counters=("router_boots",)))
         return out
 
 
-class LineDiffer:
-    """Wyznacza nowe linie między kolejnymi zrzutami bufora.
+    def _client_event(self, iface: str, action: str, mac: str, t: datetime) -> list:
+        name = self.client_names.get(mac) or mac
+        band = BANDS.get(iface, iface)
+        info = {"mac": mac, "name": name, "band": band, "iface": iface}
+        if action == "CONNECTED":
+            last = self._last_disc.pop(mac, None)
+            back = round((t - last).total_seconds()) if last and (t - last).total_seconds() <= 900 else None
+            if back is not None:
+                info["back_after_s"] = back
+            text = f"WiFi: {name} połączony ({band})" + (f", wrócił po {back} s" if back is not None else "")
+            return [Event("_wifi_connect", text, t, data=info, counters=("wifi_connects",))]
 
-    Bufor routera tylko przesuwa się do przodu (stare linie wypadają z początku),
-    więc koniec poprzedniego zrzutu leży w nowym zrzucie na tej samej pozycji albo
-    wcześniej. Szukamy go od poprzedniej pozycji w dół - to ważne, bo w logu Deco
-    często powtarzają się identyczne linie.
+        out = [Event("_wifi_disconnect", f"WiFi: {name} rozłączony ({band})", t, data=info,
+                     counters=("wifi_disconnects",))]
+        self._last_disc[mac] = t
+        # masowe: RÓŻNE urządzenia w 60 s (nie kolejne linie tego samego urządzenia)
+        self._disc_win = [w for w in self._disc_win if (t - w[0]).total_seconds() <= 60] + [(t, mac, info)]
+        devices: dict = {}
+        for x, m, d in self._disc_win:
+            devices.setdefault(m, {**d, "time": x.strftime("%H:%M:%S"), "ts": x.timestamp()})
+        if len(devices) >= self.MASS_DEVICES and (
+                self._mass_last is None or (t - self._mass_last).total_seconds() > 120):
+            self._mass_last = t
+            names = [d["name"] for d in devices.values()]
+            more = f" (+{len(names) - 6})" if len(names) > 6 else ""
+            out.append(Event("wifi_mass_disconnect",
+                             f"Masowe rozłączenia WiFi na głównym Deco: {len(devices)} urządzeń w 60 s – "
+                             + ", ".join(names[:6]) + more,
+                             t, "problem", data={"devices": list(devices.values())},
+                             counters=("wifi_mass_disconnects",)))
+        # pojedyncze urządzenie, które co chwilę się rozłącza
+        hist = [x for x in self._flap.get(mac, []) if (t - x).total_seconds() <= 600] + [t]
+        self._flap[mac] = hist
+        last_flap = self._flap_last.get(mac)
+        if len(hist) >= 4 and (last_flap is None or (t - last_flap).total_seconds() > 1800):
+            self._flap_last[mac] = t
+            out.append(Event("wifi_client_flapping", f"WiFi: {name} rozłączył się {len(hist)}× w 10 min ({band})",
+                             t, "warning", data={**info, "count": len(hist)}, counters=("wifi_flapping",)))
+        if len(self._flap) > 1000:
+            self._flap = {m: h for m, h in self._flap.items() if (t - h[-1]).total_seconds() <= 600}
+        return out
+
+
+class LineDeduper:
+    """Wybiera z kolejnego zrzutu bufora linie, których jeszcze nie ma w archiwum.
+
+    Eksport logu z Deco bywa nieaktualny albo ucięty (co kilka pobrań router oddaje
+    sam początek bufora), a bufor co jakiś czas się czyści. Dlatego nie porównujemy
+    zrzutów ze sobą, tylko każdą linię z tym, co już zapisaliśmy - z krotnością, bo w logu
+    są identyczne linie z tej samej sekundy. Linia znana i wyraźnie starsza niż najnowszy
+    zapisany wpis to kopia, nawet jeśli w zrzucie występuje częściej.
     """
 
-    ANCHOR = 5
+    HORIZON = 3 * 3600  # jak długo pamiętamy zapisane linie
+    SLACK = 5  # s: wpisy różnych procesów bywają lekko nie po kolei
 
     def __init__(self):
-        self.prev_tail: list = []
-        self.prev_len: int | None = None
+        self.seen: Counter = Counter()
+        self._order: deque = deque()  # (czas, hash)
+        self.newest: float | None = None
+        self.stale_dumps = 0
+
+    def _add(self, h: int, ts: float | None) -> None:
+        self.seen[h] += 1
+        self._order.append((ts if ts is not None else (self.newest or 0), h))
+        if ts is not None and (self.newest is None or ts > self.newest):
+            self.newest = ts
+
+    def _expire(self) -> None:
+        if self.newest is None:
+            return
+        while self._order and self._order[0][0] < self.newest - self.HORIZON:
+            _, h = self._order.popleft()
+            self.seen[h] -= 1
+            if self.seen[h] <= 0:
+                del self.seen[h]
+
+    def remember(self, lines: list) -> None:
+        """Odbudowa pamięci z archiwum po starcie dodatku."""
+        last = None
+        for line in lines:
+            ts = line_epoch(line)
+            last = ts if ts is not None else last
+            self._add(hash(line), last)
+        self._expire()
+
+    NEAR = 200  # identyczne wpisy z tej samej sekundy leżą w buforze tuż obok siebie
 
     def new_lines(self, lines: list) -> list:
-        prev_tail, prev_len = self.prev_tail, self.prev_len
-        if lines:
-            self.prev_tail, self.prev_len = lines[-self.ANCHOR :], len(lines)
-        if not prev_tail:
-            return lines  # pierwszy zrzut: cały bufor (zapis do archiwum)
-        start = self._find(lines, prev_tail, prev_len)
-        if start is None:
-            start = self._find(lines, prev_tail[-1:], prev_len)
-        return lines if start is None else lines[start:]
+        dump: Counter = Counter()
+        pos: dict = {}
+        out, last = [], None
+        for idx, line in enumerate(lines):
+            ts = line_epoch(line)
+            last = ts if ts is not None else last
+            h = hash(line)
+            dump[h] += 1
+            prev_pos, pos[h] = pos.get(h), idx
+            known = self.seen.get(h, 0)
+            if dump[h] <= known:
+                continue
+            if known:
+                if last is not None and self.newest is not None and last < self.newest - self.SLACK:
+                    continue  # kolejna kopia starej linii
+                if prev_pos is not None and idx - prev_pos > self.NEAR:
+                    continue  # ta sama linia daleko w zrzucie = zawartość podwojona
+            out.append(line)
+            self._add(h, last)
+        if lines and not out:
+            end = line_epoch(lines[-1])
+            if end is not None and self.newest is not None and end < self.newest - self.SLACK:
+                self.stale_dumps += 1
+        self._expire()
+        return out
 
-    @staticmethod
-    def _find(lines: list, anchor: list, prev_len: int | None):
-        k = len(anchor)
-        top = len(lines) - k
-        if prev_len is not None:
-            top = min(top, prev_len - k)
-        for i in range(top, -1, -1):
-            if lines[i : i + k] == anchor:
-                return i + k
+
+_EPOCH_CACHE: dict = {}
+
+
+def line_epoch(line: str) -> float | None:
+    """Znacznik czasu linii logu Deco jako epoch (bez pełnego parsowania)."""
+    head = line[:24]
+    if len(head) < 24 or head[3] != " " or head[19] != " ":
         return None
+    ts = _EPOCH_CACHE.get(head)
+    if ts is None:
+        try:
+            ts = datetime.strptime(" ".join(head.split()), "%a %b %d %H:%M:%S %Y").timestamp()
+        except ValueError:
+            return None
+        if len(_EPOCH_CACHE) > 50000:
+            _EPOCH_CACHE.clear()
+        _EPOCH_CACHE[head] = ts
+    return ts

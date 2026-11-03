@@ -25,7 +25,9 @@ Router trzyma w pamięci tylko ~10 minut logu – dodatek zapisuje go na stałe
 | Przełączenie WAN → LTE i z powrotem | `mobile_backup: ewan_disconnect / ewan_recovered` |
 | Satelita na kablu przeszła na radio (i wróciła) | `hostapd: AP-STA-CONNECTED` z adresem satelity |
 | Główne Deco nie może połączyć się z satelitą | `ssh_connect: Timeout connecting to …` |
-| Masowe rozłączenia WiFi (≥ 6 w minutę), restart Deco | `AP-STA-DISCONNECTED`, start syslogd |
+| Masowe rozłączenia WiFi (≥ 5 różnych urządzeń w minutę) – z listą urządzeń | `AP-STA-DISCONNECTED` |
+| Niestabilne urządzenie WiFi (≥ 4 rozłączenia w 10 min) | `AP-STA-DISCONNECTED` |
+| Restart Deco | start syslogd |
 
 Do tego zdarzenia z innych źródeł: brak pingu i powrót (z czasem zaniku), utrata linku na porcie switcha,
 restart switcha (wyzerowane liczniki), węzeł offline, zmiana połączenia węzła.
@@ -37,8 +39,12 @@ pingi odpowiadają i przez ~35 s nie przyszło nic nowego. Wtedy powstaje jedno 
 
 > 17:09:34 Zanik kabla WAN, 31 s; restart DHCP LAN ×1; na radiu: bedroom; brak pingu: Google DNS, Cloudflare
 
-Podsumowanie trafia do `sensor.deco_monitor_ostatni_incydent` (pełna oś czasu w atrybutach), do encji
-zdarzeń (`event_type: incident`) i do panelu dodatku.
+Podsumowanie trafia do `sensor.deco_monitor_ostatni_incydent` (w atrybutach: oś czasu, rozłączone urządzenia
+WiFi z informacją, czy i kiedy wróciły, oraz 40 linii logu Deco z tego okresu), do encji zdarzeń
+(`event_type: incident`) i do panelu dodatku – tam z pełnym logiem okresu incydentu.
+
+Rozłączenia WiFi widać tylko dla urządzeń połączonych z **głównym** Deco – satelity mają własne logi, których
+eksport głównego Deco nie zawiera.
 
 Zdarzenia z logu docierają do HA z opóźnieniem ~15 s (co tyle pobierany jest log), ale **z zachowaniem
 odstępów czasowych** – 8-sekundowy zanik kabla jest na osi czasu widoczny jako 8 s. Dokładny czas z routera

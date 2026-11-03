@@ -22,6 +22,7 @@ POINTS = {
     "eth_ports_reset": "reset portów Ethernet",
     "lan_dhcp_restart": "restart DHCP",
     "wifi_mass_disconnect": "masowe rozłączenia WiFi",
+    "wifi_client_flapping": "urządzenie WiFi rozłącza się co chwilę",
     "router_boot": "restart Deco",
     "switch_counters_reset": "restart switcha",
 }

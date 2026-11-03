@@ -70,6 +70,11 @@ pre.log{margin:0;font:12px/1.5 var(--mono);white-space:pre-wrap;word-break:break
 pre.log .err{color:var(--bad)}pre.log .warn{color:var(--warn)}pre.log .hit{background:color-mix(in srgb,var(--info) 20%,transparent)}
 pre.log .noise{opacity:.45}
 a{color:var(--info)}.empty{color:var(--muted);padding:18px 0;text-align:center}
+.sub-h{font-weight:600;margin:12px 0 4px}table.devs td,table.devs th{padding:4px 8px}
+details.logx{margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+details.logx summary{cursor:pointer;font-weight:600}details.logx pre.log{max-height:420px}
+tr.evr{cursor:pointer}tr.evr:hover td{background:var(--lane)}tr.det td{background:var(--lane);padding:10px 12px}
+.more{color:var(--muted);margin-left:6px}.kvs{display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:6px}.kv{font-size:12.5px}
 </style>
 </head>
 <body>
@@ -121,7 +126,7 @@ a{color:var(--info)}.empty{color:var(--muted);padding:18px 0;text-align:center}
 <section id="tab-log" class="hidden">
   <div class="bar"><select id="day"></select>
     <input type="search" id="q" placeholder="Filtr, np. br-wan, smartip, bedroom…">
-    <label><input type="checkbox" id="onlyerr"> tylko błędy</label>
+    <label title="Deco oznacza jako err także rutynowe wpisy (DHCP, client_mgmt)"><input type="checkbox" id="onlyerr"> tylko err/crit</label>
     <label><input type="checkbox" id="hidenoise" checked> ukryj szum modemu LTE</label>
     <label><input type="checkbox" id="auto" checked> odświeżaj</label><a id="dl" href="#">pobierz plik</a></div>
   <div class="muted small" id="loginfo" style="margin-bottom:6px"></div>
@@ -358,15 +363,32 @@ function lastOutage(){if(!TL)return null;let best=null;
 /* powiększona oś czasu jednego incydentu (sekunda po sekundzie) */
 async function zoomIncident(el,i){const s=Date.parse(i.start)/1000,e=Date.parse(i.end)/1000,m=Math.max(20,(e-s)*0.15);
   const tl=await get(`api/timeline?from=${s-m}&to=${e+m}&compact=1`);drawTimeline(el,tl)}
-function incidentBody(i,open){return `${(i.effects||[]).length?`<div class="muted" style="margin:2px 0 8px">Skutki: ${esc(i.effects.join("; "))}</div>`:""}
+/* ---------- szczegóły: urządzenia WiFi i log z danego okresu ---------- */
+function devicesTable(devs){if(!devs||!devs.length)return "";
+  return `<div class="sub-h">Urządzenia WiFi rozłączone w tym czasie (${devs.length})</div><table class="devs"><thead><tr><th>Urządzenie</th><th>MAC</th><th>Pasmo</th>
+   <th>Rozłączenie</th><th>Powrót</th></tr></thead><tbody>${devs.map(d=>`<tr><td>${esc(d.name)}</td><td class="t">${esc(d.mac)}</td><td>${esc(d.band||"")}</td>
+   <td class="t">${esc(d.pierwsze||d.time||"")}${d.rozlaczenia>1?` <span class="muted">(×${d.rozlaczenia})</span>`:""}</td>
+   <td>${d.wrocil_po_s!=null?`po ${d.wrocil_po_s} s`:d.back_after_s!=null?`po ${d.back_after_s} s`:d.rozlaczenia===undefined
+     ?'<span class="muted" title="w chwili zdarzenia jeszcze nie wiadomo – patrz incydent">–</span>':'<span class="muted">nie wrócił w trakcie incydentu</span>'}</td></tr>`).join("")}</tbody></table>`}
+function logBlock(from,to,label){return `<details class="logx" data-from="${from}" data-to="${to}"><summary>${label||"Log Deco z tego okresu"}</summary>
+   <div class="bar small" style="margin:6px 0"><label><input type="checkbox" class="nz"> pokaż szum (modem LTE, IGMP, klucze WiFi)</label>
+   <span class="muted cnt"></span></div><pre class="log"></pre></details>`}
+function wireLogBlocks(root){root.querySelectorAll("details.logx").forEach(d=>{if(d.dataset.wired)return;d.dataset.wired=1;
+  const load=async()=>{const r=await get(`api/log_range?from=${d.dataset.from}&to=${d.dataset.to}&noise=${d.querySelector(".nz").checked?1:0}`);
+    d.querySelector(".cnt").textContent=`${r.lines.length} z ${r.total} linii`;
+    d.querySelector("pre").innerHTML=r.lines.length?renderLines(r.lines):"Brak linii w archiwum dla tego okresu."};
+  d.addEventListener("toggle",()=>{if(d.open)load()});d.querySelector(".nz").onchange=load})}
+function incidentBody(i){const s=Date.parse(i.start)/1000,e=Date.parse(i.end)/1000;
+  return `${(i.effects||[]).length?`<div class="muted" style="margin:2px 0 8px">Skutki: ${esc(i.effects.join("; "))}</div>`:""}
    <div class="zoom"></div>
-   <ul class="tl">${i.timeline.map(t=>`<li class="${t.severity}"><span class="t">${t.time}</span>${esc(t.text)}</li>`).join("")}</ul>`}
+   <ul class="tl">${i.timeline.map(t=>`<li class="${t.severity}"><span class="t">${t.time}</span>${esc(t.text)}</li>`).join("")}</ul>
+   ${devicesTable(i.devices)}${logBlock(s-20,e+20)}`}
 let lastIncKey=null;
 async function lastIncident(list){const i=list[0];const el=$("#lastinc");
   if(!i){el.innerHTML=`<div class="ch"><h2>Ostatni incydent</h2></div><div class="empty">Brak zarejestrowanych incydentów.</div>`;return}
   const key=i.start+i.summary;if(key===lastIncKey&&el.querySelector(".zoom svg"))return;lastIncKey=key;
   el.innerHTML=`<div class="ch"><h2>Ostatni incydent: ${esc(i.cause)}</h2><span class="small muted">${esc(i.start.replace("T"," "))} · ${i.duration_s} s</span></div>${incidentBody(i)}`;
-  await zoomIncident(el.querySelector(".zoom"),i)}
+  wireLogBlocks(el);await zoomIncident(el.querySelector(".zoom"),i)}
 
 async function overview(){const [s,tl,dl,inc]=await Promise.all([get("api/status"),get(`api/timeline?hours=${range.tl}`),get("api/daily?days=14"),get("api/incidents?limit=1")]);
   S=s;TL=tl;kpis(s,dl);drawTimeline($("#timeline"),tl);drawMesh($("#mesh"),s);drawSwitch($("#switch"),s);lastIncident(inc)}
@@ -396,19 +418,37 @@ async function incs(){const list=await get("api/incidents?limit=200");const box=
    <span class="muted">${esc(i.start.replace("T"," "))} · ${i.duration_s} s</span></div>
    <div class="body ${incOpen.has(i.start)?"":"hidden"}">${incidentBody(i)}</div></div>`).join("")
    :`<div class="card empty">Brak zarejestrowanych incydentów.</div>`;
+  wireLogBlocks(box);
   box.querySelectorAll(".card[data-k]").forEach(c=>{const i=list[+c.dataset.k],body=c.querySelector(".body");
     const load=()=>{if(!body.querySelector(".zoom svg"))zoomIncident(body.querySelector(".zoom"),i)};
     if(!body.classList.contains("hidden"))load();
     c.querySelector(".inc-h").onclick=()=>{body.classList.toggle("hidden");
       body.classList.contains("hidden")?incOpen.delete(i.start):(incOpen.add(i.start),load())}})}
+const DATA_LABELS={node:"węzeł",ip:"IP",name:"nazwa",host:"adres",kind:"rodzaj",outage_s:"zanik [s]",port:"port",label:"opis",
+  mac:"MAC",band:"pasmo",iface:"interfejs",count:"liczba",from:"z",to:"na",back_after_s:"wrócił po [s]"};
+function eventDetails(e){const d=e.data||{},t=Date.parse(e.time)/1000;
+  const kv=Object.entries(d).filter(([k,v])=>k!=="devices"&&v!==null&&typeof v!=="object")
+    .map(([k,v])=>`<span class="kv"><span class="muted">${esc(DATA_LABELS[k]||k)}:</span> ${esc(v)}</span>`).join("");
+  return `${kv?`<div class="kvs">${kv}</div>`:""}${devicesTable(d.devices)}${logBlock(t-30,t+30,"Log Deco ±30 s")}`}
+let evOpen=new Set();
 async function evs(){const sev=$("#evsev").value,q=$("#evq").value.toLowerCase();let list=await get("api/events?limit=3000");
   list=list.filter(e=>(!sev||e.severity===sev)&&(!q||(e.message+e.type).toLowerCase().includes(q))).slice(0,600);
-  $("#evs").innerHTML=list.length?list.map(e=>`<tr><td class="t">${esc(e.time.replace("T"," "))}</td><td><span class="sev ${e.severity}">${e.severity}</span></td>
-   <td>${esc(e.message)}${e.historyczne?' <span class="muted small">(z bufora przy starcie)</span>':""}</td></tr>`).join("")
-   :`<tr><td colspan="3" class="empty">Brak zdarzeń.</td></tr>`}
+  const tb=$("#evs"),sig=sev+q+list.map(e=>e.time+e.type).join();if(sig===tb.dataset.sig)return;tb.dataset.sig=sig;
+  tb.innerHTML=list.length?list.map((e,k)=>{const id=e.time+e.type,open=evOpen.has(id);return `<tr class="evr" data-id="${esc(id)}"><td class="t">${esc(e.time.replace("T"," "))}</td>
+   <td><span class="sev ${e.severity}">${e.severity}</span></td><td>${esc(e.message)}${e.historyczne?' <span class="muted small">(z bufora przy starcie)</span>':""}
+   <span class="more">${open?"▾":"▸"}</span></td></tr><tr class="det ${open?"":"hidden"}"><td colspan="3">${eventDetails(e)}</td></tr>`}).join("")
+   :`<tr><td colspan="3" class="empty">Brak zdarzeń.</td></tr>`;
+  wireLogBlocks(tb);
+  tb.querySelectorAll("tr.evr").forEach(r=>r.onclick=()=>{const det=r.nextElementSibling,id=r.dataset.id;det.classList.toggle("hidden");
+    const open=!det.classList.contains("hidden");open?evOpen.add(id):evOpen.delete(id);r.querySelector(".more").textContent=open?"▾":"▸";
+    const lx=det.querySelector("details.logx");if(open&&lx&&!lx.open)lx.open=true})}
 async function days(){const d=await get("api/days");const sel=$("#day"),cur=sel.value;
   sel.innerHTML=d.map(x=>`<option>${x}</option>`).join("");if(cur&&d.includes(cur))sel.value=cur}
-const NOISE=/\[mobile\]|simplecom/;const HIT=/br-wan|conn-indicator|smartip|mobile_backup|ssh_connect|AP-STA-|Lease of/;
+const NOISE=/\[mobile\]|simplecom|IMPROXY|wpa_driver_nl80211_set_key|tp2\d\d,/;
+const HIT=/br-wan|conn-indicator|smartip|mobile_backup|ssh_connect|AP-STA-|Lease of|disassociate|not found in arp/;
+// Deco loguje rutynę (DHCP, client_mgmt, uhttpd) jako daemon.err - na czerwono tylko crit/alert/emerg
+function renderLines(lines){return lines.map(l=>{const c=/\.(crit|emerg|alert) /.test(l)&&!NOISE.test(l)?"err":"";
+  return `<span class="${c}${HIT.test(l)?" hit":""}${NOISE.test(l)?" noise":""}">${esc(l)}</span>`}).join("\n")}
 async function logv(){if(!$("#day").options.length)await days();const day=$("#day").value;
   if(!day){$("#log").textContent="Archiwum jest puste – pierwszy zrzut logu pojawi się kilka sekund po starcie.";return}
   const q=$("#q").value,lv=$("#onlyerr").checked?"err,crit,emerg,alert":"";
@@ -417,8 +457,7 @@ async function logv(){if(!$("#day").options.length)await days();const day=$("#da
   $("#dl").href=`api/download?day=${day}`;
   $("#loginfo").textContent=`${r.matched} z ${r.total} linii pasuje${hide?`, po ukryciu szumu LTE: ${lines.length}`:""} (pokazane ostatnie)`;
   const pre=$("#log"),atEnd=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-20;
-  pre.innerHTML=lines.map(l=>{const c=/\.(err|crit|emerg|alert) /.test(l)?"err":/\.warn /.test(l)?"warn":"";
-    return `<span class="${c}${HIT.test(l)?" hit":""}${NOISE.test(l)?" noise":""}">${esc(l)}</span>`}).join("\n");
+  pre.innerHTML=renderLines(lines);
   if(atEnd)pre.scrollTop=pre.scrollHeight}
 
 /* ---------- nawigacja ---------- */

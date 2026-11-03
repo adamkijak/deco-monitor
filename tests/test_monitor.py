@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "deco_monitor",
 from incidents import summarize  # noqa: E402
 from mqtt_pub import slugify  # noqa: E402
 from switch_api import _parse_all_info  # noqa: E402
-from syslog_parser import LineDiffer, LogAnalyzer, mac_tail, parse_line  # noqa: E402
+from syslog_parser import LineDeduper, LogAnalyzer, mac_tail, parse_line  # noqa: E402
 
 NODES = [
     {"name": "Poddasze", "ip": "192.168.68.1", "macs": ["02-00-00-00-01-08"], "master": True},
@@ -90,20 +90,89 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(mac_tail("zły"), "")
 
 
-class DifferTest(unittest.TestCase):
-    def test_new_lines_after_rotation(self):
-        d = LineDiffer()
-        first = [f"l{i}" for i in range(10)]
-        self.assertEqual(d.new_lines(first), first)
-        self.assertEqual(d.new_lines([f"l{i}" for i in range(3, 13)]), ["l10", "l11", "l12"])
-        self.assertEqual(d.new_lines([f"l{i}" for i in range(3, 13)]), [])
-        # bufor przewinął się w całości - wszystko jest nowe
-        self.assertEqual(d.new_lines(["x1", "x2"]), ["x1", "x2"])
+def L(sec, msg="x"):
+    return f"Tue Nov  3 {19 + sec // 3600:02d}:{sec // 60 % 60:02d}:{sec % 60:02d} 2026 daemon.notice {msg}"
 
-    def test_repeated_identical_lines(self):
-        d = LineDiffer()
-        d.new_lines(["a", "b", "b", "b", "b", "b"])
-        self.assertEqual(d.new_lines(["a", "b", "b", "b", "b", "b", "b", "c"]), ["b", "c"])
+
+class DedupTest(unittest.TestCase):
+    def test_growing_buffer(self):
+        d = LineDeduper()
+        a = [L(i, f"m{i}") for i in range(10)]
+        self.assertEqual(d.new_lines(a), a)
+        self.assertEqual(d.new_lines(a + [L(10, "m10"), L(11, "m11")]), [L(10, "m10"), L(11, "m11")])
+        self.assertEqual(d.new_lines(a), [])
+
+    def test_stale_and_truncated_dumps_add_nothing(self):
+        # prawdziwy przypadek: co kilka pobrań router oddaje sam początek bufora
+        d = LineDeduper()
+        full = [L(i, f"m{i}") for i in range(100)]
+        d.new_lines(full)
+        self.assertEqual(d.new_lines(full[:38]), [])
+        self.assertEqual(d.stale_dumps, 1)
+        self.assertEqual(d.new_lines(full + [L(100, "nowa")]), [L(100, "nowa")])
+
+    def test_identical_lines_same_second(self):
+        d = LineDeduper()
+        same = L(5, "wpa_driver set_key")
+        d.new_lines([L(4, "a"), same])
+        # drugi identyczny wpis z tej samej sekundy dopisany do bufora później - jest nowy
+        self.assertEqual(d.new_lines([L(4, "a"), same, same]), [same])
+        self.assertEqual(d.new_lines([L(4, "a"), same, same]), [])
+
+    def test_doubled_dump_old_copies_rejected(self):
+        d = LineDeduper()
+        a = [L(i, f"m{i}") for i in range(900)]  # bufor Deco ma ~900-4000 linii
+        d.new_lines(a)
+        self.assertEqual(d.new_lines(a + a + [L(901, "n")]), [L(901, "n")])
+
+    def test_buffer_cleared_by_router(self):
+        d = LineDeduper()
+        d.new_lines([L(i, f"m{i}") for i in range(50)])
+        fresh = [L(200 + i, f"po czyszczeniu {i}") for i in range(3)]
+        self.assertEqual(d.new_lines(fresh), fresh)
+
+    def test_restart_remembers_archive(self):
+        archive = [L(i, f"m{i}") for i in range(30)]
+        d = LineDeduper()
+        d.remember(archive)
+        self.assertEqual(d.new_lines(archive + [L(31, "nowa")]), [L(31, "nowa")])
+
+
+class WifiTest(unittest.TestCase):
+    def setUp(self):
+        self.a = LogAnalyzer()
+        self.a.update_nodes(NODES)
+        self.a.update_clients({"7C-00-E5-5C-A2-77": "OnePlus-13", "D0-00-B3-44-64-22": "TV TCL"})
+
+    def run_lines(self, lines):
+        out = []
+        for ln in lines:
+            out += self.a.analyze(parse_line(ln))
+        return out
+
+    def sta(self, sec, action, mac, iface="ath1"):
+        return L(sec, f"hostapd: {iface}: AP-STA-{action} {mac}")
+
+    def test_one_device_repeated_is_not_mass(self):
+        ev = self.run_lines([self.sta(i * 5, "DISCONNECTED", "7c:00:e5:5c:a2:77") for i in range(8)])
+        self.assertNotIn("wifi_mass_disconnect", [e.type for e in ev])
+        flap = [e for e in ev if e.type == "wifi_client_flapping"]
+        self.assertEqual(len(flap), 1)
+        self.assertIn("OnePlus-13", flap[0].message)
+
+    def test_mass_lists_devices_and_reconnect(self):
+        macs = ["7c:00:e5:5c:a2:77", "d0:00:b3:44:64:22", "02:00:00:00:00:03", "02:00:00:00:00:04",
+                "02:00:00:00:00:05"]
+        ev = self.run_lines([self.sta(i, "DISCONNECTED", m, "ath0" if i % 2 else "ath1")
+                             for i, m in enumerate(macs)] + [self.sta(20, "CONNECTED", macs[0])])
+        mass = [e for e in ev if e.type == "wifi_mass_disconnect"][0]
+        self.assertIn("5 urządzeń", mass.message)
+        self.assertIn("OnePlus-13", mass.message)
+        self.assertIn("TV TCL", mass.message)
+        names = {d["name"]: d for d in mass.data["devices"]}
+        self.assertEqual(names["TV TCL"]["band"], "2,4 GHz")
+        back = [e for e in ev if e.type == "_wifi_connect"][0]
+        self.assertEqual(back.data["back_after_s"], 20)
 
 
 class IncidentTest(unittest.TestCase):
@@ -124,6 +193,21 @@ class IncidentTest(unittest.TestCase):
         self.assertTrue(inc["summary"].startswith("17:09:34 Zanik kabla WAN, 31 s"))
         self.assertIn("na radiu: bedroom", inc["summary"])
         self.assertIn("brak pingu: Google DNS", inc["summary"])
+
+    def test_devices_in_incident(self):
+        t0 = datetime(2026, 11, 3, 19, 4, 26).timestamp()
+        dev = {"mac": "7c:00:e5:5c:a2:77", "name": "OnePlus-13", "band": "5 GHz"}
+        inc = summarize({"items": [
+            {"ts": t0, "type": "wifi_mass_disconnect", "text": "masowe", "severity": "problem",
+             "data": {"devices": [{**dev, "time": "19:04:26"}]}},
+            {"ts": t0 + 2, "type": "_wifi_disconnect", "text": "", "severity": "info", "data": dev},
+            {"ts": t0 + 14, "type": "_wifi_connect", "text": "", "severity": "info",
+             "data": {**dev, "back_after_s": 12}},
+        ]})
+        self.assertEqual(inc["devices"][0]["name"], "OnePlus-13")
+        self.assertEqual(inc["devices"][0]["wrocil_po_s"], 12)
+        self.assertEqual([t["type"] for t in inc["timeline"]], ["wifi_mass_disconnect"])  # bez szczegółów WiFi
+        self.assertIn("rozłączone WiFi (1): OnePlus-13", inc["summary"])
 
 
 class MiscTest(unittest.TestCase):

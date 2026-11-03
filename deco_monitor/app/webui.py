@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import viz
+from noise import NOISE_RE
 
 log = logging.getLogger("webui")
 
@@ -58,6 +59,12 @@ def start_webui(mon, port: int) -> None:
                     return self._json(viz.metrics(store, hours))
                 if route == "daily":
                     return self._json(viz.daily(store, min(int(q.get("days", 14)), 90)))
+                if route == "log_range":
+                    lines = store.read_range(float(q["from"]), float(q["to"]), 6000)
+                    total = len(lines)
+                    if q.get("noise") != "1":
+                        lines = [l for l in lines if not NOISE_RE.search(l)]
+                    return self._json({"lines": lines, "total": total})
                 if route == "days":
                     return self._json(store.days())
                 if route == "log":

@@ -42,6 +42,56 @@ class Store:
                 with open(self.log_path(day), "a", encoding="utf-8") as fh:
                     fh.write("\n".join(lines) + "\n")
 
+    def tail_lines(self, max_lines: int = 30000) -> list:
+        """Ostatnie linie archiwum (wczoraj + dziś) - do odbudowy deduplikacji po starcie."""
+        out: list = []
+        for day in sorted(self.days())[-2:]:
+            with open(self.log_path(day), encoding="utf-8", errors="replace") as fh:
+                out.extend(l.rstrip("\n") for l in fh if l.strip())
+        return out[-max_lines:]
+
+    def read_range(self, from_ts: float, to_ts: float, max_lines: int = 3000) -> list:
+        """Linie archiwum z przedziału czasu (wg znacznika czasu routera)."""
+        from syslog_parser import line_epoch
+
+        out, inside = [], False
+        day = datetime.fromtimestamp(from_ts).replace(hour=0, minute=0, second=0, microsecond=0)
+        while day.timestamp() <= to_ts:
+            path = self.log_path(day.strftime("%Y-%m-%d"))
+            if os.path.exists(path):
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        line = line.rstrip("\n")
+                        if not line:
+                            continue
+                        ts = line_epoch(line)
+                        if ts is not None:
+                            inside = from_ts <= ts <= to_ts
+                        if inside:  # linie bez czasu (kontynuacje) idą z poprzednią
+                            out.append(line)
+                            if len(out) >= max_lines:
+                                return out
+            day = datetime.fromtimestamp(day.timestamp() + 86400 + 3600).replace(hour=0)
+        return out
+
+    def dedupe_archive(self) -> int:
+        """Jednorazowe usunięcie duplikatów z archiwum zapisanego przez wersje < 1.2.0."""
+        from syslog_parser import LineDeduper
+
+        removed = 0
+        with self._lock:
+            for day in sorted(self.days()):
+                path = self.log_path(day)
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    lines = [l.rstrip("\n") for l in fh if l.strip()]
+                clean = LineDeduper().new_lines(lines)
+                if len(clean) < len(lines):
+                    removed += len(lines) - len(clean)
+                    os.replace(path, path + ".przed-1.2.0")
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write("\n".join(clean) + "\n")
+        return removed
+
     def days(self) -> list:
         out = []
         for name in os.listdir(self.logs_dir):
@@ -148,6 +198,8 @@ class Store:
             try:
                 if datetime.strptime(day, "%Y-%m-%d").timestamp() < cutoff:
                     os.remove(self.log_path(day))
+                    if os.path.exists(self.log_path(day) + ".przed-1.2.0"):
+                        os.remove(self.log_path(day) + ".przed-1.2.0")
             except (OSError, ValueError):
                 pass
         for path, keep in ((self.events_path, 50000), (self.incidents_path, 5000)):

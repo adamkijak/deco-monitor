@@ -1,5 +1,5 @@
 name: Deco Monitor
-version: "1.1.0"
+version: "1.2.0"
 slug: deco_monitor
 description: >-
   Monitoring sieci TP-Link Deco: archiwum syslogu, zdarzenia (zaniki WAN, utrata

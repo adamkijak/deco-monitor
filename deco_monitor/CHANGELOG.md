@@ -1,5 +1,21 @@
 # Zmiany
 
+## 1.2.0
+
+- **Naprawa fałszywych alarmów:** eksport logu z Deco co kilka pobrań jest nieaktualny albo ucięty (router oddaje
+  sam początek bufora). Wersje 1.0–1.1 dopisywały wtedy stare linie drugi raz i analizowały je ponownie – stąd np.
+  „Masowe rozłączenia WiFi: 6 urządzeń”, gdy rozłączyło się jedno urządzenie kilka razy policzone. Teraz każda linia
+  jest porównywana z tym, co już jest w archiwum (z krotnością), a pamięć odbudowuje się z archiwum po restarcie.
+  Przy pierwszym starcie 1.2.0 archiwum jest jednorazowo czyszczone z duplikatów (kopia: `*.przed-1.2.0`).
+- Rozłączenia WiFi ze szczegółami: nazwa urządzenia (z aplikacji Deco), MAC, pasmo, czy i po ilu sekundach wróciło.
+  Masowe rozłączenie liczy **różne** urządzenia (≥ 5 w 60 s). Nowe zdarzenie: urządzenie rozłącza się ≥ 4× w 10 min.
+- Incydenty: tabela rozłączonych urządzeń i **log Deco z okresu incydentu** (panel; 40 linii także w atrybucie
+  `log` encji `sensor.deco_monitor_ostatni_incydent`). Czas incydentu WiFi: od pierwszego rozłączenia do ostatniego
+  powrotu.
+- Zdarzenia w panelu rozwijają się: szczegóły (urządzenia, węzeł, port…) i log ±30 s.
+- Log: na czerwono tylko crit/alert/emerg (Deco oznacza rutynę jako `daemon.err`), szum ukrywany także w logach
+  przy incydentach (modem LTE, IGMP, klucze WiFi, wpisy firewalla).
+
 ## 1.1.0
 
 - Panel dodatku z wykresami (bez zewnętrznych bibliotek, działa offline): oś czasu zaników 1 h – 7 dni, mapa

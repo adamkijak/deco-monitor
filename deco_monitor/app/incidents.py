@@ -23,7 +23,9 @@ class IncidentTracker:
         self._lock = threading.Lock()
         self._open: dict | None = None
 
-    def signal(self, ts: float, etype: str, text: str, severity: str, data: dict | None = None) -> None:
+    def signal(self, ts: float, etype: str, text: str, severity: str, data: dict | None = None,
+               extend: bool = True) -> None:
+        """extend=False: sygnał dołącza do incydentu, ale go nie przedłuża (np. zwykłe roamingi WiFi)."""
         with self._lock:
             if self._open is None:
                 if severity != "problem":
@@ -32,7 +34,8 @@ class IncidentTracker:
             inc = self._open
             inc["items"].append({"ts": ts, "type": etype, "text": text, "severity": severity,
                                  "data": data or {}})
-            inc["last_signal"] = time.time()
+            if extend:
+                inc["last_signal"] = time.time()
             if severity == "problem":
                 inc["last_problem"] = max(inc["last_problem"], ts)
             inc["start"] = min(inc["start"], ts)
@@ -51,12 +54,39 @@ class IncidentTracker:
         self.on_close(summarize(inc))
 
 
+def _devices(items: list) -> list:
+    """Urządzenia WiFi rozłączone w trakcie incydentu: kiedy i czy wróciły."""
+    devs: dict = {}
+    for i in items:
+        d = i["data"]
+        if i["type"] == "_wifi_disconnect":
+            e = devs.setdefault(d.get("mac"), {"name": d.get("name"), "mac": d.get("mac"), "band": d.get("band"),
+                                              "rozlaczenia": 0, "pierwsze": _fmt(i["ts"]), "wrocil_po_s": None})
+            e["rozlaczenia"] += 1
+            e["wrocil_po_s"] = None
+        elif i["type"] == "_wifi_connect" and d.get("mac") in devs and d.get("back_after_s") is not None:
+            devs[d["mac"]]["wrocil_po_s"] = d["back_after_s"]
+        elif i["type"] == "wifi_mass_disconnect":
+            for m in d.get("devices", []):
+                devs.setdefault(m.get("mac"), {"name": m.get("name"), "mac": m.get("mac"), "band": m.get("band"),
+                                              "rozlaczenia": 1, "pierwsze": m.get("time"), "wrocil_po_s": None})
+    return sorted(devs.values(), key=lambda x: x["pierwsze"] or "")
+
+
 def summarize(inc: dict) -> dict:
-    items = sorted(inc["items"], key=lambda i: i["ts"])
+    all_items = sorted(inc["items"], key=lambda i: i["ts"])
+    devices = _devices(all_items)
+    items = [i for i in all_items if not i["type"].startswith("_")]
     types = [i["type"] for i in items]
     tset = set(types)
     start = items[0]["ts"]
     end = items[-1]["ts"]
+    # przy rozłączeniach WiFi: od pierwszego rozłączenia do ostatniego powrotu urządzenia
+    for i in all_items:
+        if i["type"] == "wifi_mass_disconnect":
+            start = min([start] + [d["ts"] for d in i["data"].get("devices", []) if d.get("ts")])
+        elif i["type"] == "_wifi_connect" and i["data"].get("back_after_s") is not None:
+            end = max(end, i["ts"])
     duration = max(0, round(end - start))
 
     def pings(kind=None, down=True):
@@ -90,7 +120,7 @@ def summarize(inc: dict) -> dict:
     effects = []
     if "clients_kicked" in tset:
         effects.append(f"Deco wyrzuciło klientów WiFi ×{types.count('clients_kicked')}")
-    if "wifi_mass_disconnect" in tset and "clients_kicked" not in tset:
+    if "wifi_mass_disconnect" in tset and "clients_kicked" not in tset and not devices:
         effects.append("masowe rozłączenia WiFi")
     if "lan_dhcp_restart" in tset:
         effects.append(f"restart DHCP LAN ×{types.count('lan_dhcp_restart')}")
@@ -111,6 +141,11 @@ def summarize(inc: dict) -> dict:
         ports = sorted({str(i["data"].get("label")) for i in items if i["type"] == "switch_port_down"})
         effects.append("switch: " + ", ".join(ports))
 
+    if devices:
+        names = [d["name"] for d in devices]
+        effects.append(f"rozłączone WiFi ({len(names)}): " + ", ".join(names[:5])
+                       + (f" (+{len(names) - 5})" if len(names) > 5 else ""))
+
     summary = f"{_fmt(start)} {cause}, {duration} s"
     if effects:
         summary += "; " + "; ".join(effects)
@@ -121,6 +156,7 @@ def summarize(inc: dict) -> dict:
         "cause": cause,
         "effects": effects,
         "summary": summary[:250],
+        "devices": devices,
         "timeline": [
             {"time": datetime.fromtimestamp(i["ts"]).strftime("%H:%M:%S"), "type": i["type"],
              "text": i["text"], "severity": i["severity"]}

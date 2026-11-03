@@ -29,14 +29,15 @@ from dashboard import build_config, build_dashboard  # noqa: E402
 from deco_api import DecoClient, DecoError, DecoTransientError, b64_name  # noqa: E402
 from ha_ws import HAError, HomeAssistantWS  # noqa: E402
 from incidents import IncidentTracker  # noqa: E402
+from noise import NOISE_RE  # noqa: E402
 from mqtt_pub import Publisher, slugify, supervisor_mqtt  # noqa: E402
 from pinger import Pinger  # noqa: E402
 from store import Store  # noqa: E402
 from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
-from syslog_parser import EVENT_TYPES, LineDiffer, LogAnalyzer, parse_line  # noqa: E402
+from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -51,6 +52,7 @@ COUNTERS = {
     "wifi_connects": ("Połączenia WiFi", "mdi:wifi-plus"),
     "wifi_disconnects": ("Rozłączenia WiFi", "mdi:wifi-minus"),
     "wifi_mass_disconnects": ("Masowe rozłączenia WiFi", "mdi:wifi-alert"),
+    "wifi_flapping": ("Niestabilne urządzenia WiFi", "mdi:wifi-sync"),
     "router_boots": ("Restarty Deco", "mdi:restart"),
     "incidents": ("Incydenty", "mdi:alert-octagon"),
     "ping_outages": ("Zaniki ping", "mdi:lan-pending"),
@@ -74,6 +76,7 @@ def config_hash(obj) -> str:
 
 
 DASH_URL = "siec-deco"
+
 
 
 def save_json(path: str, obj) -> None:
@@ -103,7 +106,7 @@ class Monitor:
 
         self.deco = DecoClient(opts["deco_host"], opts["deco_password"])
         self.analyzer = LogAnalyzer()
-        self.differ = LineDiffer()
+        self.dedup = LineDeduper()
         self.syslog_interval = float(opts.get("syslog_interval", 10))
         # zdarzenia z logu publikujemy z przesunięciem `lag`, zachowując odstępy czasowe
         self.lag = self.syslog_interval + 5
@@ -113,8 +116,16 @@ class Monitor:
         self.counters = load_json(os.path.join(self.data_dir, "counters.json"), {})
         self.persist = load_json(os.path.join(self.data_dir, "state.json"), {})
         self._persist_lock = threading.Lock()
-        self.differ.prev_tail = self.persist.get("anchor", [])
-        self.differ.prev_len = self.persist.get("anchor_len")
+        if not self.persist.get("archive_deduped_1_2"):
+            # wersje < 1.2.0 dopisywały nieaktualne zrzuty bufora drugi raz
+            removed = self.store.dedupe_archive()
+            if removed:
+                log.warning("Usunięto %d zduplikowanych linii z archiwum (kopie: *.przed-1.2.0)", removed)
+            self.persist["archive_deduped_1_2"] = True
+            self.persist.pop("anchor", None)
+            self.persist.pop("anchor_len", None)
+            save_json(os.path.join(self.data_dir, "state.json"), self.persist)
+        self.dedup.remember(self.store.tail_lines())
 
         self.ents: dict = {}
         self.values: dict = {}  # ostatnie wartości (dla web UI)
@@ -250,6 +261,9 @@ class Monitor:
             for c in counters:
                 self.bump(c)
         if etype.startswith("_"):
+            # pojedyncze (dis)asocjacje WiFi: tylko jako szczegóły trwającego incydentu
+            if not quiet and self.incidents.is_open():
+                self.incidents.signal(ts, etype, message, "info", data, extend=False)
             return
         when = datetime.fromtimestamp(ts)
         self.store.add_event({"time": when.isoformat(timespec="seconds"), "type": etype, "severity": severity,
@@ -285,9 +299,18 @@ class Monitor:
             self.set(skey, val)
 
     def _incident_closed(self, inc: dict) -> None:
+        # log z tego okresu (bez szumu modemu LTE) - do panelu i atrybutów encji
+        try:
+            start = datetime.fromisoformat(inc["start"]).timestamp()
+            end = datetime.fromisoformat(inc["end"]).timestamp()
+            lines = self.store.read_range(start - 20, end + 20, max_lines=5000)
+            inc["log"] = [l for l in lines if not NOISE_RE.search(l)][:150]
+        except Exception:
+            log.exception("Nie udało się dołączyć logu do incydentu")
         self.store.add_incident(inc)
         self.bump("incidents")
-        self.set("last_incident", inc["summary"], inc)
+        attrs = {**inc, "log": inc.get("log", [])[:40]}
+        self.set("last_incident", inc["summary"], attrs)
         self.set("incident_active", False)
         payload = {"event_type": "incident", "message": inc["summary"], "severity": "problem",
                    "time": inc["start"], "cause": inc["cause"], "duration_s": inc["duration_s"]}
@@ -348,11 +371,9 @@ class Monitor:
             self.deco.stok = None
             return
         lines = [l for l in text.splitlines() if l.strip()]
-        new = self.differ.new_lines(lines)
-        self.persist["anchor"] = self.differ.prev_tail
-        self.persist["anchor_len"] = self.differ.prev_len
-        self.save_persist()
-        self.status.update(deco="OK", syslog_at=datetime.now().isoformat(timespec="seconds"))
+        new = self.dedup.new_lines(lines)
+        self.status.update(deco="OK", syslog_at=datetime.now().isoformat(timespec="seconds"),
+                           stale_dumps=self.dedup.stale_dumps)
         if not new:
             return
         parsed = [parse_line(l) for l in new]
@@ -394,6 +415,7 @@ class Monitor:
         v4 = inet.get("ipv4") or {}
         if self.log_state_at.get("internet", 0) < recent and v4.get("inet_status"):
             self.set("internet", v4["inet_status"] == "online")
+        self.analyzer.update_clients({c.get("mac"): b64_name(c.get("name", "")) for c in clients})
         wifi = sum(1 for c in clients if c.get("wire_type") == "wireless")
         self.set("clients_wifi", wifi)
         self.set("clients_wired", len(clients) - wifi)

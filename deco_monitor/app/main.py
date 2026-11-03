@@ -38,7 +38,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -495,14 +495,18 @@ class Monitor:
         self._write_dashboard()
 
     def poll_switch(self) -> None:
+        host = self.opts.get("switch_host")
+        self.pinger.mark_busy(host, time.time() + 60)  # na czas odczytu (z ponownymi próbami)
         try:
             ports = self.switch.read_ports()
         except SwitchError as exc:
+            self.pinger.mark_busy(host, time.time() + 2)
             self._switch_fails += 1
             if self._switch_fails == 3:  # pojedyncze odrzucenia to norma dla tego switcha
                 log.warning("Switch nie odpowiada (3 odczyty z rzędu): %s", exc)
                 self.status["switch"] = f"błąd: {exc}"
             return
+        self.pinger.mark_busy(host, time.time() + 2)
         if self._switch_fails >= 3:
             log.info("Switch znów odpowiada")
         self._switch_fails = 0

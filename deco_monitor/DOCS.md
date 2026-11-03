@@ -157,6 +157,11 @@ actions:
 
 ## Uwagi
 
+- **Ping do switcha ≠ szybkość sieci.** Na ping do adresu switcha Easy Smart odpowiada jego mały procesor
+  zarządzający (ten sam, który obsługuje panel WWW). Pojedyncze 20–200 ms to zwykle zajęty procesor, np. ktoś ma
+  otwarty panel switcha. Przesyłanie danych robi osobny układ sprzętowy – o stanie sieci za switchem lepiej świadczy
+  ping do urządzenia podłączonego do niego kablem. Dodatek nie mierzy switcha w trakcie własnych odczytów panelu.
+
 - Integracja [tplink_deco](https://github.com/amosyuen/ha-tplink-deco) i ten dodatek logują się do Deco jako ten
   sam administrator. Deco czasem unieważnia wtedy starszą sesję – oba same logują się ponownie. Gdy w logu dodatku
   często widać „Błąd API”, zwiększ `api_interval` albo interwał odświeżania integracji.

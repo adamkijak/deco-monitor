@@ -47,6 +47,15 @@ class Pinger:
         self.targets: dict = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        # host -> czas, do którego nie mierzymy (np. switch, gdy dodatek czyta jego panel WWW:
+        # ten sam słaby procesor odpowiada na ping i generuje stronę - pomiar mierzyłby sam siebie)
+        self.busy_until: dict = {}
+
+    def mark_busy(self, host: str, until: float) -> None:
+        self.busy_until[host] = until
+
+    def _busy(self, host: str) -> bool:
+        return time.time() < self.busy_until.get(host, 0)
 
     def set_target(self, key: str, name: str, host: str, kind: str) -> bool:
         with self._lock:
@@ -57,8 +66,12 @@ class Pinger:
             return True
 
     def _probe(self, t: Target) -> None:
+        if self._busy(t.host):
+            return
         rtt = ping_once(t.host)
         now = time.time()
+        if self._busy(t.host):  # odczyt panelu zaczął się w trakcie pingu - próbka niemiarodajna
+            return
         with self._lock:
             t.window.append((now, rtt))
             if rtt is not None:

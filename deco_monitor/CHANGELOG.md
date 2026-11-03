@@ -1,5 +1,11 @@
 # Zmiany
 
+## 1.2.3
+
+- Ping do switcha nie jest mierzony w trakcie odczytu jego panelu WWW i 2 s po nim. Na ping odpowiada ten sam słaby
+  procesor, który generuje stronę ze statystykami – pomiar pokazywał 30–200 ms, które dodatek sam wywoływał
+  (ruch przez switch idzie układem sprzętowym i nie zwalnia: urządzenia za switchem 4–7 ms).
+
 ## 1.2.2
 
 - Log Deco: filtr „tylko err/crit” zastąpiony filtrem **„tylko istotne”**. Deco zapisuje rutynę (DHCP, menedżer

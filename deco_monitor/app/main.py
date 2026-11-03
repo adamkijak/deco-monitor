@@ -29,6 +29,7 @@ from dashboard import build_config, build_dashboard  # noqa: E402
 from deco_api import DecoClient, DecoError, DecoTransientError, b64_name  # noqa: E402
 from ha_ws import HAError, HomeAssistantWS  # noqa: E402
 from incidents import IncidentTracker  # noqa: E402
+from migrate import remove_false_alarms  # noqa: E402
 from noise import NOISE_RE  # noqa: E402
 from mqtt_pub import Publisher, slugify, supervisor_mqtt  # noqa: E402
 from pinger import Pinger  # noqa: E402
@@ -37,7 +38,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -210,14 +211,40 @@ class Monitor:
             self.ent(f"cnt_{key}", "sensor", name, icon=icon, state_class="total_increasing")
             self.set(f"cnt_{key}", int(self.counters.get(key, 0)))
         self.set("incident_active", False)
-        last_inc = self.store.incidents(1)
-        if last_inc:
-            self.set("last_incident", last_inc[0]["summary"], last_inc[0])
+        self._publish_history()
         for t in self.opts.get("ping_targets") or []:
             self.add_ping_target(f"t_{slugify(t['name'])}", t["name"], t["host"], t.get("kind", "local"))
         if self.switch:
             for n in range(1, 9):
                 self._register_port(n)
+
+    def _publish_history(self) -> None:
+        """Ostatni incydent i ostatnie zdarzenie z archiwum (np. po starcie albo po migracji)."""
+        inc = self.store.incidents(1)
+        if inc:
+            self.set("last_incident", inc[0]["summary"], {**inc[0], "log": inc[0].get("log", [])[:40]})
+        else:
+            self.set("last_incident", "brak", {})
+        ev = [e for e in self.store.events(20) if not e.get("historyczne")]
+        if ev:
+            e = ev[0]
+            self.set("last_event", f"{e['time'][11:19]} {e['message']}"[:255],
+                     {"typ": e["type"], "waga": e["severity"], "czas": e["time"], **(e.get("data") or {})})
+
+    def _remove_false_alarms(self) -> None:
+        if self.persist.get("false_alarms_removed_1_2_1"):
+            return
+        try:
+            stats = remove_false_alarms(self.store, self.analyzer.MASS_DEVICES, set(self.analyzer.satellites))
+            if stats["usuniete_zdarzenia"] or stats["usuniete_incydenty"]:
+                log.warning("Usunięto fałszywe alarmy sprzed wersji 1.2.0: %d zdarzeń, %d incydentów",
+                            stats["usuniete_zdarzenia"], stats["usuniete_incydenty"])
+                self._publish_history()
+        except Exception:
+            log.exception("Nie udało się usunąć starych fałszywych alarmów")
+            return
+        self.persist["false_alarms_removed_1_2_1"] = True
+        self.save_persist()
 
     def add_ping_target(self, key: str, name: str, host: str, kind: str) -> None:
         if not self.pinger.set_target(key, name, host, kind):
@@ -644,6 +671,7 @@ class Monitor:
                 log.error("Deco niedostępne (%s), ponowna próba za 30 s", exc)
                 time.sleep(30)
         log.info("Węzły mesh: %s", ", ".join(f"{n['name']} ({n['conn']})" for n in self.nodes.values()))
+        self._remove_false_alarms()
         loops = [
             ("syslog", self.syslog_interval, self.poll_syslog),
             ("api", float(self.opts.get("api_interval", 30)), self.poll_api),

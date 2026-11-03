@@ -210,6 +210,35 @@ class IncidentTest(unittest.TestCase):
         self.assertIn("rozłączone WiFi (1): OnePlus-13", inc["summary"])
 
 
+class MigrationTest(unittest.TestCase):
+    def test_removes_only_unconfirmed_mass_alarms(self):
+        import json
+        import tempfile
+
+        from migrate import remove_false_alarms
+        from store import Store
+
+        st = Store(tempfile.mkdtemp(), 30)
+        st.append_log([(None, "Tue Nov  3 19:04:26 2026 daemon.notice hostapd: ath1: AP-STA-DISCONNECTED "
+                              "7c:00:e5:5c:a2:77")])
+        os.replace(st.log_path(datetime.now().strftime("%Y-%m-%d")), st.log_path("2026-11-03"))
+        false_ev = {"time": "2026-11-03T19:04:26", "type": "wifi_mass_disconnect", "severity": "problem",
+                    "message": "Masowe rozłączenia WiFi: 6 urządzeń w 60 s", "data": {}}
+        real_ev = {"time": "2026-11-03T17:09:34", "type": "wan_link_down", "severity": "problem",
+                   "message": "Kabel WAN: brak linku", "data": {}}
+        for e in (real_ev, false_ev, false_ev):
+            st.add_event(e)
+        st.add_incident({"start": "2026-11-03T17:09:34", "summary": "Zanik kabla WAN",
+                         "timeline": [{"time": "17:09:34", "type": "wan_link_down", "severity": "problem"}]})
+        st.add_incident({"start": "2026-11-03T19:04:26", "summary": "Masowe rozłączenie klientów WiFi",
+                         "timeline": [{"time": "19:04:26", "type": "wifi_mass_disconnect", "severity": "problem"}]})
+        stats = remove_false_alarms(st, 5, set())
+        self.assertEqual([e["type"] for e in st.events(10)], ["wan_link_down"])
+        self.assertEqual([i["summary"] for i in st.incidents(10)], ["Zanik kabla WAN"])
+        self.assertEqual(stats, {"usuniete_zdarzenia": 2, "usuniete_incydenty": 1})
+        self.assertTrue(os.path.exists(st.events_path + ".przed-1.2.1"))
+
+
 class MiscTest(unittest.TestCase):
     def test_slugify_like_home_assistant(self):
         self.assertEqual(slugify("Ping Deco główne opóźnienie"), "ping_deco_glowne_opoznienie")

@@ -1,5 +1,11 @@
 # Zmiany
 
+## 1.2.1
+
+- Przy pierwszym starcie usuwane są fałszywe alarmy „masowe rozłączenia WiFi” zapisane przez wersje < 1.2.0
+  (sprawdzane na oczyszczonym archiwum: w logu z tej minuty mniej niż 5 różnych urządzeń) oraz incydenty, które
+  tylko z nich powstały. „Ostatni incydent” i „Ostatnie zdarzenie” pokazują potem ostatni prawdziwy wpis.
+
 ## 1.2.0
 
 - **Naprawa fałszywych alarmów:** eksport logu z Deco co kilka pobrań jest nieaktualny albo ucięty (router oddaje

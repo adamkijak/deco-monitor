@@ -1,0 +1,80 @@
+name: Deco Monitor
+version: "1.0.0"
+slug: deco_monitor
+description: >-
+  Monitoring sieci TP-Link Deco: archiwum syslogu, zdarzenia (zaniki WAN, utrata
+  kabla satelit, wyrzucanie klientów), stan mesh, switch TL-SG108E i ping co 2 s.
+  Encje w HA przez MQTT, incydenty i panel z logami.
+url: https://github.com/adamkijak/deco-monitor
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+services:
+  - mqtt:want
+map:
+  - share:rw
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:router-network
+panel_title: Deco Monitor
+options:
+  deco_host: "192.168.68.1"
+  deco_password: ""
+  syslog_interval: 10
+  api_interval: 30
+  switch_host: "192.168.68.70"
+  switch_username: admin
+  switch_password: ""
+  switch_interval: 10
+  switch_port_names:
+    - port 1
+    - port 2
+    - port 3
+    - port 4
+    - port 5
+    - port 6
+    - port 7
+    - port 8
+  ping_interval: 2
+  ping_mesh_nodes: true
+  ping_targets:
+    - name: Google DNS
+      host: 8.8.8.8
+      kind: internet
+    - name: Cloudflare
+      host: 1.1.1.1
+      kind: internet
+    - name: Deco główne
+      host: 192.168.68.1
+      kind: local
+    - name: Switch
+      host: 192.168.68.70
+      kind: local
+  log_retention_days: 30
+  log_level: info
+schema:
+  deco_host: str
+  deco_password: password
+  syslog_interval: int(5,300)
+  api_interval: int(10,600)
+  switch_host: str?
+  switch_username: str?
+  switch_password: password?
+  switch_interval: int(2,300)
+  switch_port_names:
+    - str
+  ping_interval: int(1,60)
+  ping_mesh_nodes: bool
+  ping_targets:
+    - name: str
+      host: str
+      kind: list(internet|local|mesh)
+  log_retention_days: int(1,365)
+  log_level: list(debug|info|warning)
+  mqtt_host: str?
+  mqtt_port: port?
+  mqtt_username: str?
+  mqtt_password: password?

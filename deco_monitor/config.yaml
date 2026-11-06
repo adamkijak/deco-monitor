@@ -1,8 +1,8 @@
 name: Deco Monitor
-version: "1.2.3"
+version: "1.3.0"
 slug: deco_monitor
 description: >-
-  Monitoring sieci TP-Link Deco: archiwum syslogu, zdarzenia (zaniki WAN, utrata
+  Monitoring sieci TP-Link Deco: archiwum syslogu (główny Deco i satelity), zdarzenia (zaniki WAN, utrata
   kabla satelit, wyrzucanie klientów), stan mesh, switch TL-SG108E i ping co 2 s.
   Encje w HA przez MQTT, incydenty i panel z logami.
 url: https://github.com/adamkijak/deco-monitor
@@ -54,6 +54,9 @@ options:
     - name: Switch
       host: 192.168.68.70
       kind: local
+  satellite_syslog: true
+  satellite_syslog_interval: 300
+  satellite_log_retention_days: 7
   log_retention_days: 30
   auto_dashboard: true
   log_level: info
@@ -74,6 +77,9 @@ schema:
     - name: str
       host: str
       kind: list(internet|local|mesh)
+  satellite_syslog: bool
+  satellite_syslog_interval: int(60,1800)
+  satellite_log_retention_days: int(1,365)
   log_retention_days: int(1,365)
   auto_dashboard: bool
   log_level: list(debug|info|warning)

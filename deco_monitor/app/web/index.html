@@ -27,7 +27,7 @@ nav{display:flex;gap:2px;margin-top:8px;overflow-x:auto}
 nav button{border:0;background:none;color:var(--muted);padding:8px 14px;font:inherit;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
 nav button.on{color:var(--fg);border-bottom-color:var(--info);font-weight:600}
 main{max-width:1280px;margin:0 auto;padding:16px}
-section.hidden{display:none}
+section.hidden,select.hidden{display:none}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
 .card h2{font-size:14px;margin:0;font-weight:600}
 .ch{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
@@ -124,7 +124,7 @@ tr.evr{cursor:pointer}tr.evr:hover td{background:var(--lane)}tr.det td{backgroun
 </section>
 
 <section id="tab-log" class="hidden">
-  <div class="bar"><select id="day"></select>
+  <div class="bar"><select id="src" title="Log głównego Deco albo satelity (satelity mają własne logi swoich radiów)"></select><select id="day"></select>
     <input type="search" id="q" placeholder="Filtr, np. br-wan, smartip, bedroom…">
     <label title="Wpisy rozpoznawane jako zdarzenia (WAN, internet, satelity, WiFi…) oraz błędy spoza znanej rutyny. Deco oznacza jako err także zwykłe wpisy DHCP i menedżera klientów – te są ukryte."><input type="checkbox" id="onlyerr"> tylko istotne</label>
     <label><input type="checkbox" id="hidenoise" checked> ukryj szum modemu LTE</label>
@@ -443,19 +443,23 @@ async function evs(){const sev=$("#evsev").value,q=$("#evq").value.toLowerCase()
   tb.querySelectorAll("tr.evr").forEach(r=>r.onclick=()=>{const det=r.nextElementSibling,id=r.dataset.id;det.classList.toggle("hidden");
     const open=!det.classList.contains("hidden");open?evOpen.add(id):evOpen.delete(id);r.querySelector(".more").textContent=open?"▾":"▸";
     const lx=det.querySelector("details.logx");if(open&&lx&&!lx.open)lx.open=true})}
-async function days(){const d=await get("api/days");const sel=$("#day"),cur=sel.value;
+async function sources(){const s=await get("api/sources");const sel=$("#src"),cur=sel.value;
+  sel.innerHTML=s.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
+  if(s.some(x=>x.id===cur))sel.value=cur;sel.classList.toggle("hidden",s.length<2)}
+async function days(){const d=await get(`api/days?src=${encodeURIComponent($("#src").value)}`);const sel=$("#day"),cur=sel.value;
   sel.innerHTML=d.map(x=>`<option>${x}</option>`).join("");if(cur&&d.includes(cur))sel.value=cur}
 const NOISE=/\[mobile\]|simplecom|IMPROXY|wpa_driver_nl80211_set_key|tp2\d\d,/;
 const HIT=/br-wan|conn-indicator|smartip|mobile_backup|ssh_connect|AP-STA-|Lease of|disassociate|not found in arp/;
 // Deco loguje rutynę (DHCP, client_mgmt, uhttpd) jako daemon.err - na czerwono tylko crit/alert/emerg
 function renderLines(lines){return lines.map(l=>{const c=/\.(crit|emerg|alert) /.test(l)&&!NOISE.test(l)?"err":"";
   return `<span class="${c}${HIT.test(l)?" hit":""}${NOISE.test(l)?" noise":""}">${esc(l)}</span>`}).join("\n")}
-async function logv(){if(!$("#day").options.length)await days();const day=$("#day").value;
-  if(!day){$("#log").textContent="Archiwum jest puste – pierwszy zrzut logu pojawi się kilka sekund po starcie.";return}
+async function logv(){await sources();if(!$("#day").options.length)await days();
+  const day=$("#day").value,src=encodeURIComponent($("#src").value);
+  if(!day){$("#log").textContent=$("#src").value?"Brak logu tej satelity – pierwszy zrzut pojawi się po kilku minutach (o ile satelita udostępnia log).":"Archiwum jest puste – pierwszy zrzut logu pojawi się kilka sekund po starcie.";return}
   const q=$("#q").value,imp=$("#onlyerr").checked?1:0;
-  const r=await get(`api/log?day=${day}&q=${encodeURIComponent(q)}&important=${imp}&limit=6000`);
+  const r=await get(`api/log?src=${src}&day=${day}&q=${encodeURIComponent(q)}&important=${imp}&limit=6000`);
   const hide=$("#hidenoise").checked;const lines=hide?r.lines.filter(l=>!NOISE.test(l)):r.lines;
-  $("#dl").href=`api/download?day=${day}`;
+  $("#dl").href=`api/download?src=${src}&day=${day}`;
   $("#loginfo").textContent=`${r.matched} z ${r.total} linii pasuje${hide?`, po ukryciu szumu LTE: ${lines.length}`:""} (pokazane ostatnie)`;
   const pre=$("#log"),atEnd=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-20;
   pre.innerHTML=renderLines(lines);
@@ -474,6 +478,7 @@ async function refresh(){if(busy)return;busy=true;try{
   else if(tab==="ev")await evs();else if(tab==="log")await logv();await header()}
   catch(e){console.error(e);$("#sub").textContent="błąd: "+e.message}finally{busy=false}}
 ["#evsev","#evq"].forEach(s=>$(s).oninput=evs);["#day","#onlyerr","#hidenoise"].forEach(s=>$(s).onchange=logv);
+$("#src").onchange=async()=>{$("#day").innerHTML="";await days();await logv()};
 let qt;$("#q").oninput=()=>{clearTimeout(qt);qt=setTimeout(logv,300)};
 let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(refresh,200)});
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",refresh);

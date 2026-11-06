@@ -12,14 +12,25 @@ from datetime import datetime
 from noise import is_important  # noqa: E402
 
 _DAY_RE = re.compile(r"^deco-(\d{4}-\d{2}-\d{2})\.log$")
+# log satelity: deco-<źródło>-RRRR-MM-DD.log, źródło = slug nazwy węzła (np. kitchen)
+_SAT_RE = re.compile(r"^deco-([a-z0-9_]+)-(\d{4}-\d{2}-\d{2})\.log$")
+_SRC_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def valid_source(source: str) -> bool:
+    """"" = główny Deco; inaczej slug węzła (bez kropek i ukośników - trafia do nazwy pliku)."""
+    return source == "" or bool(_SRC_RE.match(source))
 
 
 class Store:
-    def __init__(self, root: str, retention_days: int):
+    def __init__(self, root: str, retention_days: int, satellite_retention_days: int | None = None):
         self.root = root
         self.logs_dir = os.path.join(root, "logs")
         os.makedirs(self.logs_dir, exist_ok=True)
         self.retention_days = retention_days
+        # logi X50 to ~50 MB na dobę na satelitę - zwykle trzymamy je krócej niż log głównego Deco
+        self.satellite_retention_days = satellite_retention_days or retention_days
         self.events_path = os.path.join(root, "events.jsonl")
         self.incidents_path = os.path.join(root, "incidents.jsonl")
         self.metrics_dir = os.path.join(root, "metrics")
@@ -27,10 +38,13 @@ class Store:
         self._lock = threading.Lock()
 
     # -- surowy log --------------------------------------------------------
-    def log_path(self, day: str) -> str:
-        return os.path.join(self.logs_dir, f"deco-{day}.log")
+    def log_path(self, day: str, source: str = "") -> str:
+        if not valid_source(source) or not _DATE_RE.match(day):
+            raise ValueError(f"niepoprawny log: {source!r} {day!r}")
+        name = f"deco-{source}-{day}.log" if source else f"deco-{day}.log"
+        return os.path.join(self.logs_dir, name)
 
-    def append_log(self, entries: list) -> None:
+    def append_log(self, entries: list, source: str = "") -> None:
         """entries: [(datetime|None, raw_line)]"""
         if not entries:
             return
@@ -41,14 +55,14 @@ class Store:
             by_day.setdefault(day, []).append(raw)
         with self._lock:
             for day, lines in by_day.items():
-                with open(self.log_path(day), "a", encoding="utf-8") as fh:
+                with open(self.log_path(day, source), "a", encoding="utf-8") as fh:
                     fh.write("\n".join(lines) + "\n")
 
-    def tail_lines(self, max_lines: int = 30000) -> list:
+    def tail_lines(self, max_lines: int = 30000, source: str = "") -> list:
         """Ostatnie linie archiwum (wczoraj + dziś) - do odbudowy deduplikacji po starcie."""
         out: list = []
-        for day in sorted(self.days())[-2:]:
-            with open(self.log_path(day), encoding="utf-8", errors="replace") as fh:
+        for day in sorted(self.days(source))[-2:]:
+            with open(self.log_path(day, source), encoding="utf-8", errors="replace") as fh:
                 out.extend(l.rstrip("\n") for l in fh if l.strip())
         return out[-max_lines:]
 
@@ -94,18 +108,35 @@ class Store:
                         fh.write("\n".join(clean) + "\n")
         return removed
 
-    def days(self) -> list:
+    def days(self, source: str = "") -> list:
         out = []
         for name in os.listdir(self.logs_dir):
-            m = _DAY_RE.match(name)
-            if m:
-                out.append(m.group(1))
+            if source:
+                m = _SAT_RE.match(name)
+                if m and m.group(1) == source:
+                    out.append(m.group(2))
+            else:
+                m = _DAY_RE.match(name)
+                if m:
+                    out.append(m.group(1))
         return sorted(out, reverse=True)
 
+    def sources(self) -> list:
+        """Satelity, których logi są w archiwum (slugi)."""
+        out = set()
+        for name in os.listdir(self.logs_dir):
+            m = _SAT_RE.match(name)
+            if m:
+                out.add(m.group(1))
+        return sorted(out)
+
     def read_log(self, day: str, query: str = "", levels: set | None = None, limit: int = 3000,
-                 important: bool = False) -> dict:
-        path = self.log_path(day)
-        if not _DAY_RE.match(os.path.basename(path)) or not os.path.exists(path):
+                 important: bool = False, source: str = "") -> dict:
+        try:
+            path = self.log_path(day, source)
+        except ValueError:
+            return {"lines": [], "total": 0, "matched": 0}
+        if not os.path.exists(path):
             return {"lines": [], "total": 0, "matched": 0}
         q = query.lower().strip()
         total, matched = 0, []
@@ -199,14 +230,17 @@ class Store:
                     os.remove(os.path.join(self.metrics_dir, name))
             except OSError:
                 pass
-        for day in self.days():
-            try:
-                if datetime.strptime(day, "%Y-%m-%d").timestamp() < cutoff:
-                    os.remove(self.log_path(day))
-                    if os.path.exists(self.log_path(day) + ".przed-1.2.0"):
-                        os.remove(self.log_path(day) + ".przed-1.2.0")
-            except (OSError, ValueError):
-                pass
+        sat_cutoff = time.time() - self.satellite_retention_days * 86400
+        for source in [""] + self.sources():
+            limit = sat_cutoff if source else cutoff
+            for day in self.days(source):
+                try:
+                    if datetime.strptime(day, "%Y-%m-%d").timestamp() < limit:
+                        os.remove(self.log_path(day, source))
+                        if os.path.exists(self.log_path(day, source) + ".przed-1.2.0"):
+                            os.remove(self.log_path(day, source) + ".przed-1.2.0")
+                except (OSError, ValueError):
+                    pass
         for path, keep in ((self.events_path, 50000), (self.incidents_path, 5000)):
             if os.path.exists(path) and os.path.getsize(path) > 8 * 1024 * 1024:
                 with self._lock:

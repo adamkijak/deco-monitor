@@ -33,12 +33,13 @@ from migrate import remove_false_alarms  # noqa: E402
 from noise import NOISE_RE  # noqa: E402
 from mqtt_pub import Publisher, slugify, supervisor_mqtt  # noqa: E402
 from pinger import Pinger  # noqa: E402
+from satlogs import SatelliteLogs  # noqa: E402
 from store import Store  # noqa: E402
 from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.2.3"
+VERSION = "1.3.0"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -93,7 +94,8 @@ class Monitor:
         self.data_dir = os.environ.get("DECO_MONITOR_DATA", "/data")
         self.share_dir = os.environ.get("DECO_MONITOR_SHARE", "/share/deco_monitor")
         os.makedirs(self.data_dir, exist_ok=True)
-        self.store = Store(self.share_dir, int(opts.get("log_retention_days", 30)))
+        self.store = Store(self.share_dir, int(opts.get("log_retention_days", 30)),
+                           int(opts.get("satellite_log_retention_days", 7)))
 
         sup = supervisor_mqtt()
         self.pub = Publisher(
@@ -106,6 +108,10 @@ class Monitor:
         )
 
         self.deco = DecoClient(opts["deco_host"], opts["deco_password"])
+        self.satlogs = None
+        if opts.get("satellite_syslog", True):
+            self.satlogs = SatelliteLogs(self.store, opts["deco_password"],
+                                         float(opts.get("satellite_syslog_interval", 300)))
         self.analyzer = LogAnalyzer()
         self.dedup = LineDeduper()
         self.syslog_interval = float(opts.get("syslog_interval", 10))
@@ -491,6 +497,8 @@ class Monitor:
             if self.opts.get("ping_mesh_nodes", True) and not master and info["ip"]:
                 self.add_ping_target(f"mesh_{slugify(name)}", f"Satelita {name}", info["ip"], "mesh")
         self.analyzer.update_nodes(node_list)
+        if self.satlogs:
+            self.satlogs.update_nodes(node_list)
         self.status["deco"] = "OK"
         self._write_dashboard()
 
@@ -553,6 +561,18 @@ class Monitor:
                     self.set(f"port{n}_rate", self.port_rates[n])
                 self.port_rate_prev[n] = total
             self.port_rate_at = now
+
+    def poll_satellites(self) -> None:
+        self.satlogs.poll()
+        self.status["satelity"] = self.satlogs.status()
+
+    def log_sources(self) -> list:
+        """Źródła logu do panelu: główny Deco + satelity (znane teraz albo z archiwum)."""
+        names = self.satlogs.names() if self.satlogs else {}
+        out = [{"id": "", "name": "Deco główne"}]
+        for src in sorted(set(self.store.sources()) | set(names)):
+            out.append({"id": src, "name": f"{names.get(src, src)} (satelita)"})
+        return out
 
     def publish_stats(self) -> None:
         sample = {"t": round(time.time()), "p": {}}
@@ -686,6 +706,9 @@ class Monitor:
         ]
         if self.switch:
             loops.append(("switch", float(self.opts.get("switch_interval", 10)), self.poll_switch))
+        if self.satlogs:
+            # satelity bez dostępu (403) są pomijane do czasu kolejnej próby
+            loops.append(("satelity", self.satlogs.interval, self.poll_satellites))
         for name, interval, fn in loops:
             threading.Thread(target=self._loop, args=(name, interval, fn), daemon=True, name=name).start()
         threading.Thread(target=self.pinger.run, daemon=True, name="ping").start()

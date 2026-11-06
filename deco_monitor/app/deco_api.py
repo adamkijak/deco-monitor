@@ -70,15 +70,25 @@ def _aes_decrypt(key: str, iv: str, b64: str) -> str:
 class DecoClient:
     """Jedna sesja administratora, współdzielona przez wątki (blokada)."""
 
-    def __init__(self, host: str, password: str, timeout: float = 20.0):
+    def __init__(self, host: str, password: str, timeout: float = 20.0, scheme: str = "https",
+                 legacy_tls: bool = False):
         self.host = host
         self.password = password
         self.timeout = timeout
+        # Satelity starszej generacji (M4R, M3W) mają panel tylko po HTTP albo z TLS 1.0,
+        # którego domyślny kontekst Pythona nie przyjmuje. Hasło i tak idzie zaszyfrowane RSA/AES.
+        self.scheme = scheme
         self._lock = threading.RLock()
         self._cookie = None
         self._ctx = ssl.create_default_context()
         self._ctx.check_hostname = False
         self._ctx.verify_mode = ssl.CERT_NONE
+        if legacy_tls:
+            try:
+                self._ctx.minimum_version = ssl.TLSVersion.TLSv1
+                self._ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+            except (ValueError, ssl.SSLError):
+                pass
         self.stok = None
         self._key = self._iv = None
         self._hash = None
@@ -113,10 +123,10 @@ class DecoClient:
             raise DecoError(f"Niepoprawna odpowiedź Deco: {raw[:120]!r}") from exc
 
     def _login_url(self, form: str) -> str:
-        return f"https://{self.host}/cgi-bin/luci/;stok=/login?form={form}"
+        return f"{self.scheme}://{self.host}/cgi-bin/luci/;stok=/login?form={form}"
 
     def _admin_url(self, path: str, form: str) -> str:
-        return f"https://{self.host}/cgi-bin/luci/;stok={self.stok}/{path}?form={form}"
+        return f"{self.scheme}://{self.host}/cgi-bin/luci/;stok={self.stok}/{path}?form={form}"
 
     # -- sesja -----------------------------------------------------------
     def login(self) -> None:
@@ -194,8 +204,8 @@ class DecoClient:
             ).encode()
             headers = {
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "Origin": f"https://{self.host}",
-                "Referer": f"https://{self.host}/webpages/index.html",
+                "Origin": f"{self.scheme}://{self.host}",
+                "Referer": f"{self.scheme}://{self.host}/webpages/index.html",
             }
             text = self._http(self._admin_url("admin/log_export", "save_log"), body, headers).decode(
                 "utf-8", errors="replace"

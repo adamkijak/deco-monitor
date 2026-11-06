@@ -1,5 +1,17 @@
 # Zmiany
 
+## 1.3.0
+
+- **Logi satelit.** Log głównego Deco zawiera tylko jego własne radia, więc to, co dzieje się po drugiej stronie
+  radiowego połączenia satelity, było niewidoczne. Dodatek co 5 minut pobiera teraz eksport logu z każdej satelity,
+  która go udostępnia, i zapisuje go osobno: `logs/deco-<satelita>-RRRR-MM-DD.log` (z tą samą deduplikacją
+  co log głównego Deco). Działa z X50 (HTTPS) i M4R (HTTP); M3W 1.0.x odrzuca logowanie.
+- Starsze satelity (M4R) mają panel tylko po HTTP albo z TLS 1.0 – dodatek obsługuje oba warianty. Satelity, które
+  odrzucają logowanie (M3W 1.0.x), są sprawdzane ponownie co 6 h; ich stan widać w statusie monitora.
+- Panel: w zakładce **Log Deco** wybór źródła (główne Deco / satelita), filtr i „pobierz plik” działają dla każdego.
+- Nowe opcje: `satellite_syslog` (domyślnie włączone), `satellite_syslog_interval` (domyślnie 300 s)
+  i `satellite_log_retention_days` (domyślnie 7 dni – log X50 to ~40–70 MB na dobę).
+
 ## 1.2.3
 
 - Ping do switcha nie jest mierzony w trakcie odczytu jego panelu WWW i 2 s po nim. Na ping odpowiada ten sam słaby

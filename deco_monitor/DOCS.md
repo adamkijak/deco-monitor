@@ -1,17 +1,26 @@
 # Deco Monitor
 
-Monitoring domowej sieci TP-Link Deco w Home Assistant. Dodatek zbiera dane z czterech źródeł
+Monitoring domowej sieci TP-Link Deco w Home Assistant. Dodatek zbiera dane z pięciu źródeł
 i składa je w jeden obraz tego, co się dzieje w sieci:
 
 | źródło | co daje | jak często |
 |---|---|---|
 | **syslog głównego Deco** (to samo co „Eksportuj log” w panelu WWW) | archiwum logów na dysku + rozpoznane zdarzenia | co 10 s |
+| **syslog satelitów** (ten sam eksport, z każdej satelity, która go udostępnia) | osobne archiwum logu każdej satelity | co 5 min |
 | **lokalne API Deco** | węzły mesh: online, kabel/radio, sygnał; WAN, CPU/RAM, liczba klientów | co 30 s |
 | **switch TP-Link Easy Smart** (TL-SG108E, TL-SG105E…) | link i prędkość portów, ruch, błędy RX, wykrywanie restartu | co 10 s |
 | **ping** | internet, główne Deco, switch i każda satelita: dostępność, opóźnienie, strata | co 2 s |
 
 Router trzyma w pamięci tylko ~10 minut logu – dodatek zapisuje go na stałe
 (`/share/deco_monitor/logs/deco-RRRR-MM-DD.log`, domyślnie 30 dni).
+
+Logi satelit trafiają do `deco-<satelita>-RRRR-MM-DD.log` (np. `deco-kitchen-2026-11-07.log`), w panelu – wybór
+źródła w zakładce **Log Deco**. Satelity przyjmują to samo hasło administratora. Starsze modele (np. M4R) mają panel
+tylko po HTTP – dodatek próbuje najpierw HTTP, potem HTTPS ze starym TLS; hasło i tak jest wysyłane zaszyfrowane
+(RSA + AES, jak w aplikacji). Niektóre satelity (np. M3W z firmware 1.0.x) odrzucają logowanie – wtedy w statusie
+monitora jest „brak dostępu”, a dodatek próbuje ponownie co 6 h. Bufor satelity jest mały (~40 minut przy
+ruchliwym 2,4 GHz, ~20 minut w X50), dlatego nie ustawiaj odstępu dłuższego niż ~10 min. Log X50 jest duży
+(~40–70 MB na dobę), więc logi satelit mają osobną, krótszą retencję (`satellite_log_retention_days`, domyślnie 7 dni).
 
 ## Rozpoznawane zdarzenia
 
@@ -43,8 +52,8 @@ Podsumowanie trafia do `sensor.deco_monitor_ostatni_incydent` (w atrybutach: oś
 WiFi z informacją, czy i kiedy wróciły, oraz 40 linii logu Deco z tego okresu), do encji zdarzeń
 (`event_type: incident`) i do panelu dodatku – tam z pełnym logiem okresu incydentu.
 
-Rozłączenia WiFi widać tylko dla urządzeń połączonych z **głównym** Deco – satelity mają własne logi, których
-eksport głównego Deco nie zawiera.
+Rozłączenia WiFi są rozpoznawane jako zdarzenia tylko dla urządzeń połączonych z **głównym** Deco. Logi satelit
+są archiwizowane (patrz wyżej), ale jeszcze nie analizowane.
 
 Zdarzenia z logu docierają do HA z opóźnieniem ~15 s (co tyle pobierany jest log), ale **z zachowaniem
 odstępów czasowych** – 8-sekundowy zanik kabla jest na osi czasu widoczny jako 8 s. Dokładny czas z routera
@@ -77,6 +86,9 @@ potem Uruchom. Jeśli używasz starego dodatku *Deco Syslog Bridge* – odinstal
 | `ping_interval` | Co ile sekund pingować (zanik = 2 kolejne pingi bez odpowiedzi). |
 | `ping_targets` | Cele pingu: `name`, `host`, `kind` (`internet` / `local` / `mesh`). |
 | `ping_mesh_nodes` | Automatycznie pinguj wszystkie satelity Deco (adresy z API). |
+| `satellite_syslog` | Archiwizuj też logi satelit (każdej, która je udostępnia). |
+| `satellite_syslog_interval` | Co ile sekund pobierać log satelity (60–1800, domyślnie 300). |
+| `satellite_log_retention_days` | Ile dni trzymać logi satelit (domyślnie 7). X50 zapisuje ~40–70 MB logu na dobę. |
 | `log_retention_days` | Ile dni trzymać archiwum logów i historii pomiarów. |
 | `auto_dashboard` | Sam twórz i aktualizuj pulpit „Sieć Deco” w HA. |
 | `mqtt_*` | Tylko gdy broker MQTT nie jest dodatkiem HA. |

@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import viz
 from noise import NOISE_RE, is_important
+from store import valid_source
 
 log = logging.getLogger("webui")
 
@@ -67,23 +68,29 @@ def start_webui(mon, port: int) -> None:
                     elif q.get("noise") != "1":
                         lines = [l for l in lines if not NOISE_RE.search(l)]
                     return self._json({"lines": lines, "total": total})
+                src = q.get("src", "")
+                if not valid_source(src):
+                    return self._send(400, b"bad source", "text/plain")
+                if route == "sources":
+                    return self._json(mon.log_sources())
                 if route == "days":
-                    return self._json(store.days())
+                    return self._json(store.days(src))
                 if route == "log":
                     levels = {x for x in q.get("levels", "").split(",") if x} or None
                     return self._json(store.read_log(q.get("day", ""), q.get("q", ""), levels,
                                                      min(int(q.get("limit", 3000)), 20000),
-                                                     important=q.get("important") == "1"))
+                                                     important=q.get("important") == "1", source=src))
                 if route == "events":
                     return self._json(store.events(min(int(q.get("limit", 500)), 5000)))
                 if route == "incidents":
                     return self._json(store.incidents(min(int(q.get("limit", 100)), 2000)))
                 if route == "download":
                     day = q.get("day", "")
-                    r = store.read_log(day, limit=10**9)
+                    r = store.read_log(day, limit=10**9, source=src)
                     body = ("\n".join(r["lines"]) + "\n").encode()
+                    fname = f"deco-{src}-{day}.log" if src else f"deco-{day}.log"
                     return self._send(200, body, "text/plain; charset=utf-8",
-                                      {"Content-Disposition": f'attachment; filename="deco-{day}.log"'})
+                                      {"Content-Disposition": f'attachment; filename="{fname}"'})
                 if route == "" and not u.path.rstrip("/").endswith(".ico"):
                     with open(os.path.join(WEB_DIR, "index.html"), "rb") as fh:
                         return self._send(200, fh.read(), "text/html; charset=utf-8")

@@ -172,5 +172,66 @@ class DashboardInstallTest(unittest.TestCase):
         self.assertIn("custom:apexcharts-card", json.dumps(build_config(mon, True)))
 
 
+class FakeDeco:
+    def __init__(self):
+        self.devs = []
+
+    def read(self, path, form, params=None):
+        if form == "device_list":
+            return {"device_list": self.devs}
+        return {}
+
+
+def node(name, role="slave", conn=("wired",), speed="100"):
+    d = {"nickname": name, "role": role, "group_status": "connected", "connection_type": list(conn),
+         "device_ip": None, "mac": name}
+    if speed is not None:
+        d["backhual_speed"] = speed
+    return d
+
+
+class BackhaulSpeedTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def test_parse_speed(self):
+        self.assertEqual(main.parse_speed("100"), 100)
+        self.assertEqual(main.parse_speed("10"), 10)
+        self.assertIsNone(main.parse_speed(None))
+        self.assertIsNone(main.parse_speed("0"))
+        self.assertIsNone(main.parse_speed("abc"))
+
+    def test_sensor_event_and_dashboard(self):
+        mon = make_monitor(self.tmp, FakeHA().url)
+        mon.nodes = {}
+        mon.deco = FakeDeco()
+        mon.satlogs = None
+        events = []
+        mon.emit = lambda etype, msg, sev, ts, data=None, **kw: events.append((etype, sev, data))
+        mon.deco.devs = [node("Poddasze", role="master", conn=(), speed=None), node("living_room"),
+                         node("kitchen", conn=("band5",), speed="1000")]
+        mon.poll_api()
+        self.assertEqual(mon.values["node_living_room_bh_speed"], 100)
+        self.assertNotIn("node_kitchen_bh_speed", mon.ents)  # radio: brak prędkości kabla
+        self.assertNotIn("node_Poddasze_bh_speed", mon.ents)
+        self.assertEqual(events, [])
+
+        mon.deco.devs[1]["backhual_speed"] = "10"
+        mon.poll_api()
+        self.assertEqual(mon.values["node_living_room_bh_speed"], 10)
+        self.assertEqual(events, [("node_backhaul_speed", "warning",
+                                   {"node": "living_room", "from": 100, "to": 10})])
+
+        mon.deco.devs[1]["connection_type"] = ["band5"]  # utrata kabla -> 0 na wykresie, bez zdarzenia prędkości
+        mon.poll_api()
+        self.assertEqual(mon.values["node_living_room_bh_speed"], 0)
+        self.assertEqual([ev[0] for ev in events[1:]], ["node_backhaul_change"])
+
+        cfg = json.dumps(build_config(mon, False), ensure_ascii=False)
+        self.assertIn("Prędkość kabla do satelit", cfg)
+        self.assertIn(mon.ents["node_living_room_bh_speed"], cfg)
+        self.assertIn("node_backhaul_speed", main.EVENT_TYPES)
+
+
 if __name__ == "__main__":
     unittest.main()

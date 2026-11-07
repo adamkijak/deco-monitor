@@ -39,7 +39,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -63,6 +63,15 @@ COUNTERS = {
 }
 
 CONN_TEXT = {"wired": "kabel", "band5": "radio 5 GHz", "band2_4": "radio 2,4 GHz", "band6": "radio 6 GHz"}
+
+
+def parse_speed(value) -> int | None:
+    """backhual_speed z device_list (np. "100") -> Mbit/s; brak/0/śmieci -> None."""
+    try:
+        speed = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return speed if speed > 0 else None
 
 
 def load_json(path: str, default):
@@ -280,6 +289,10 @@ class Monitor:
             self.ent(f"node_{name}_signal", "sensor", f"{name} sygnał", unit_of_measurement="dBm",
                      device_class="signal_strength", state_class="measurement")
 
+    def _register_bh_speed(self, name: str) -> None:
+        self.ent(f"node_{name}_bh_speed", "sensor", f"{name} prędkość kabla", unit_of_measurement="Mbit/s",
+                 device_class="data_rate", state_class="measurement", icon="mdi:speedometer")
+
     # -------------------------------------------------------------- zdarzenia
     def bump(self, key: str) -> None:
         self.counters[key] = int(self.counters.get(key, 0)) + 1
@@ -473,6 +486,7 @@ class Monitor:
                 "signal_level": dev.get("signal_level"), "signal_dbm": sig,
                 "inet": dev.get("inet_status"), "fw": dev.get("software_ver"),
                 "macs": [m for m in (dev.get("mac"), dev.get("bssid_2g"), dev.get("bssid_5g")) if m],
+                "bh_speed": parse_speed(dev.get("backhual_speed")) if wired and not master else None,
             }
             node_list.append(info)
             self._register_node(name, master, sig is not None)
@@ -486,7 +500,18 @@ class Monitor:
                 if prev["conn"] != conn_text:
                     self.emit("node_backhaul_change", f"Węzeł {name}: połączenie {prev['conn']} → {conn_text}",
                               "warning", now, {"node": name, "from": prev["conn"], "to": conn_text})
+                old_sp, new_sp = prev.get("bh_speed"), info["bh_speed"]
+                if old_sp and new_sp and old_sp != new_sp:
+                    self.emit("node_backhaul_speed",
+                              f"Węzeł {name}: prędkość kabla {old_sp} → {new_sp} Mbit/s",
+                              "warning" if new_sp < old_sp else "info", now,
+                              {"node": name, "from": old_sp, "to": new_sp})
             self.nodes[name] = info
+            if info["bh_speed"]:
+                self._register_bh_speed(name)
+                self.set(f"node_{name}_bh_speed", info["bh_speed"])
+            elif f"node_{name}_bh_speed" in self.ents:
+                self.set(f"node_{name}_bh_speed", 0)  # bez kabla (na radiu) -> 0 na wykresie
             self.set(f"node_{name}_conn", conn_text,
                      {k: v for k, v in info.items() if k not in ("macs",)})
             self.set(f"node_{name}_online", online)
@@ -598,7 +623,8 @@ class Monitor:
             save_json(os.path.join(self.data_dir, "state.json"), self.persist)
 
     def _write_dashboard(self) -> None:
-        sig = (tuple(sorted(self.nodes)), tuple(sorted(self.ping_meta)), bool(self.switch))
+        sig = (tuple(sorted(self.nodes)), tuple(sorted(self.ping_meta)), bool(self.switch),
+               tuple(sorted(k for k in self.ents if k.endswith("_bh_speed"))))
         if sig == self._dash_sig:
             return
         self._dash_sig = sig

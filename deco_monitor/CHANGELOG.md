@@ -1,5 +1,14 @@
 # Zmiany
 
+## 1.3.1
+
+- **Prędkość kabla do satelit.** Nowy czujnik `sensor.<satelita>_predkosc_kabla` (Mbit/s) dla każdej satelity
+  podłączonej kablem. Pokazuje prędkość połączenia kablowego, którą zgłasza Deco (`backhual_speed`
+  w liście węzłów, np. 1000/100/10). Gdy satelita przechodzi na radio, czujnik pokazuje 0.
+- Zmiana prędkości to zdarzenie „Węzeł X: prędkość kabla 100 → 10 Mbit/s” (spadek jako ostrzeżenie, wzrost jako
+  informacja). Zdarzenie pojawia się w dzienniku i w panelu, a encja zdarzeń ma nowy typ `node_backhaul_speed`.
+- Pulpit „Sieć Deco”: kafelki węzłów pokazują prędkość kabla, a przegląd ma nowy wykres „Prędkość kabla do satelit (48 h)”.
+
 ## 1.3.0
 
 - **Logi satelit.** Log głównego Deco zawiera tylko jego własne radia, więc to, co dzieje się po drugiej stronie

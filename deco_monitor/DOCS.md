@@ -7,7 +7,7 @@ i składa je w jeden obraz tego, co się dzieje w sieci:
 |---|---|---|
 | **syslog głównego Deco** (to samo co „Eksportuj log” w panelu WWW) | archiwum logów na dysku + rozpoznane zdarzenia | co 10 s |
 | **syslog satelitów** (ten sam eksport, z każdej satelity, która go udostępnia) | osobne archiwum logu każdej satelity | co 5 min |
-| **lokalne API Deco** | węzły mesh: online, kabel/radio, sygnał; WAN, CPU/RAM, liczba klientów | co 30 s |
+| **lokalne API Deco** | węzły mesh: online, kabel/radio, sygnał, prędkość kabla do satelity; WAN, CPU/RAM, liczba klientów | co 30 s |
 | **switch TP-Link Easy Smart** (TL-SG108E, TL-SG105E…) | link i prędkość portów, ruch, błędy RX, wykrywanie restartu | co 10 s |
 | **ping** | internet, główne Deco, switch i każda satelita: dostępność, opóźnienie, strata | co 2 s |
 

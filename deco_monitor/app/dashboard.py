@@ -120,6 +120,9 @@ def _build(mon) -> dict:
         secondary = f"{{{{ states('{conn}') }}}}"
         if sig:
             secondary += f" · {{{{ states('{sig}') }}}} dBm"
+        speed = e.get(f"node_{name}_bh_speed")
+        if speed:
+            secondary += f" · {{{{ states('{speed}') }}}} Mbit/s"
         if radio and info["wired"]:
             color = (f"{{% if is_state('{online}', 'off') %}}red{{% elif is_state('{radio}', 'on') %}}"
                      f"orange{{% else %}}green{{% endif %}}")
@@ -155,6 +158,8 @@ def _build(mon) -> dict:
             timeline_lan.append({"entity": e[f"node_{name}_radio"], "name": f"{name}: na radiu"})
         timeline_lan.append({"entity": st(f"node_{name}_online"), "name": f"{name} online"})
     timeline_lan += ping_bins_mesh
+    bh_speeds = [{"entity": e[f"node_{name}_bh_speed"], "name": name}
+                 for name in sorted(mon.nodes) if e.get(f"node_{name}_bh_speed")]
     port_links = [{"entity": st(f"port{n}_link"), "name": f"Port {n} ({mon.port_labels.get(n)})"}
                   for n in range(1, 9) if has(f"port{n}_link")]
 
@@ -177,6 +182,10 @@ def _build(mon) -> dict:
              "entities": timeline_wan},
             {"type": "history-graph", "title": "Oś czasu: mesh i sieć lokalna (24 h)", "hours_to_show": 24,
              "entities": timeline_lan},
+        ] + ([
+            {"type": "history-graph", "title": "Prędkość kabla do satelit (48 h)", "hours_to_show": 48,
+             "entities": bh_speeds},
+        ] if bh_speeds else []) + [
             {"type": "logbook", "title": "Incydenty i zdarzenia", "hours_to_show": 48,
              "entities": [st("last_incident"), st("last_event")]},
         ],

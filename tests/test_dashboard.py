@@ -233,5 +233,75 @@ class BackhaulSpeedTest(unittest.TestCase):
         self.assertIn("node_backhaul_speed", main.EVENT_TYPES)
 
 
+class ParentTopologyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    @staticmethod
+    def devs():
+        m = node("Poddasze", role="master", conn=(), speed=None)
+        m["mac"] = "7C-F1-7E-69-FA-08"
+        lr = node("living_room")
+        lr.update(device_id="LR", parent_device_id="MASTER-ID", mac="B8-FB-B3-AA-A1-80")
+        k = node("kitchen", conn=("band5",), speed=None)
+        k.update(device_id="K", parent_device_id="LR", mac="00-31-92-29-CA-B4")
+        h = node("hallway", conn=(), speed=None)  # M3W: bez parent_device_id, rodzic w "previous"
+        h.update(device_id="H", previous="7c:f1:7e:69:fa:08", mac="90-9A-4A-B2-CB-EC")
+        return [m, lr, k, h]
+
+    def test_resolve_parents(self):
+        p = main.resolve_parents(self.devs(), lambda d: d["nickname"])
+        self.assertEqual(p, {"living_room": "Poddasze", "kitchen": "living_room", "hallway": "Poddasze"})
+        lone = node("x", conn=())
+        self.assertEqual(main.resolve_parents([lone], lambda d: d["nickname"]), {"x": None})
+
+    def test_sensor_event_topology_dashboard(self):
+        mon = make_monitor(self.tmp, FakeHA().url)
+        mon.nodes = {}
+        mon.deco = FakeDeco()
+        mon.satlogs = None
+        events = []
+        mon.emit = lambda etype, msg, sev, ts, data=None, **kw: events.append((etype, sev, data))
+        mon.deco.devs = self.devs()
+        mon.poll_api()
+        self.assertEqual(mon.values["node_kitchen_parent"], "living_room")
+        self.assertEqual(mon.values["node_hallway_parent"], "Poddasze")
+        self.assertNotIn("node_Poddasze_parent", mon.ents)
+        self.assertIn("Poddasze: hallway, living_room", mon.values["mesh_topology"])
+        self.assertIn("living_room: kitchen", mon.values["mesh_topology"])
+        self.assertEqual(events, [])
+
+        mon.deco.devs[2]["parent_device_id"] = "MASTER-ID"  # kuchnia przeskakuje na Poddasze
+        mon.poll_api()
+        self.assertEqual(mon.values["node_kitchen_parent"], "Poddasze")
+        self.assertEqual(events, [("node_parent_change", "warning",
+                                   {"node": "kitchen", "from": "living_room", "to": "Poddasze"})])
+        self.assertIn("node_parent_change", main.EVENT_TYPES)
+
+        cfg = json.dumps(build_config(mon, False), ensure_ascii=False)
+        self.assertIn("Topologia mesh", cfg)
+        self.assertIn(mon.ents["mesh_topology"], cfg)
+        hacs = json.dumps(build_config(mon, True), ensure_ascii=False)  # kafelki mushroom: "→ rodzic"
+        self.assertIn(f"→ {{{{ states('{mon.ents['node_kitchen_parent']}') }}}}", hacs)
+
+    def test_topology_tree(self):
+        nodes = {
+            "Poddasze": {"master": True, "online": True},
+            "living_room": {"parent": "Poddasze", "conn": "kabel", "bh_speed": 100, "online": True},
+            "kitchen": {"parent": "living_room", "conn": "radio 5 GHz", "signal_dbm": -70, "online": False},
+            "ghost": {"parent": "nieistniejący", "conn": "radio", "online": True},
+        }
+        short, tree = main.topology_text(nodes)
+        lines = tree.split("  \n")
+        self.assertTrue(lines[0].startswith("**Poddasze** – główne Deco"))
+        self.assertIn("**ghost**", tree)  # nieznany rodzic -> pod głównym
+        kitchen = next(ln for ln in lines if "kitchen" in ln)
+        self.assertIn("&nbsp;" * 8, kitchen)
+        self.assertIn("-70 dBm", kitchen)
+        self.assertIn("**offline**", kitchen)
+        self.assertIn("kabel 100 Mbit/s", tree)
+        self.assertTrue(short.startswith("Poddasze: ghost, living_room"))
+
+
 if __name__ == "__main__":
     unittest.main()

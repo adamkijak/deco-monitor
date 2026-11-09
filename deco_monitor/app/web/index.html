@@ -262,13 +262,29 @@ function drawDaily(el,rows){el.innerHTML="";const W=el.clientWidth||900,H=200,L=
     b.innerHTML=`<i style="background:${css(c)}"></i>${label}`;b.className=dailyOff.has(k)?"off":"";
     b.onclick=()=>{dailyOff.has(k)?dailyOff.delete(k):dailyOff.add(k);drawDaily(el,rows)};lg.appendChild(b)}}
 
-/* ---------- mapa mesh ---------- */
+/* ---------- mapa mesh (drzewo: kto do kogo jest podłączony) ---------- */
 function drawMesh(el,s){el.innerHTML="";const W=el.clientWidth||520;
-  const nS=s.nodes.filter(n=>!n.master).length,twoRows=nS>1&&(W-24)/nS<96,H=twoRows?332:300;
-  const svg=svgEl("svg",{viewBox:`0 0 ${W} ${H}`,height:H},el);
   const master=s.nodes.find(n=>n.master),sats=s.nodes.filter(n=>!n.master);
+  const byName=Object.fromEntries(s.nodes.map(n=>[n.name,n]));
+  const parentOf=n=>(n.parent&&byName[n.parent]&&n.parent!==n.name)?n.parent:(master?master.name:null);
+  const kids={};sats.forEach(n=>{const p=parentOf(n);(kids[p]=kids[p]||[]).push(n)});
+  Object.values(kids).forEach(a=>a.sort((x,y)=>x.name.localeCompare(y.name)));
+  // układ: liście kolejno w slotach, rodzic nad środkiem swoich dzieci
+  const pos={},seen=new Set();let leaf=0,maxD=0;
+  function lay(n,d){if(seen.has(n.name))return;seen.add(n.name);maxD=Math.max(maxD,d);
+    const ch=(kids[n.name]||[]).filter(c=>!seen.has(c.name));
+    if(!ch.length){pos[n.name]={slot:leaf++,d};return}
+    ch.forEach(c=>lay(c,d+1));
+    const xs=ch.map(c=>pos[c.name]).filter(Boolean).map(p=>p.slot);
+    pos[n.name]={slot:(Math.min(...xs)+Math.max(...xs))/2,d}}
+  if(master)lay(master,0);
+  sats.forEach(n=>{if(!seen.has(n.name))lay(n,1)});  // bez rodzica / cykl
+  const L=Math.max(1,leaf),slot=(W-24)/L,bw=Math.min(118,Math.max(62,slot-10));
+  const cx=W/2,iy=34,my=128,rowH=96,H=my+maxD*rowH+34;
+  const X=n=>master&&n.name===master.name?cx:12+slot*(pos[n.name].slot+0.5);
+  const Y=n=>my+pos[n.name].d*rowH;
+  const svg=svgEl("svg",{viewBox:`0 0 ${W} ${H}`,height:H},el);
   const v=s.values,inetOk=v.internet!==false,wanOk=v.wan_link!==false;
-  const cx=W/2,iy=34,my=128,sy0=H-(twoRows?40:62);
   const col=n=>!n.online?css("--bad"):(n.wired&&n.radio)?css("--warn"):css("--ok");
   // internet -> master
   svgEl("line",{x1:cx,y1:iy+16,x2:cx,y2:my-24,stroke:wanOk&&inetOk?css("--ok"):css("--bad"),"stroke-width":3},svg);
@@ -277,36 +293,30 @@ function drawMesh(el,s){el.innerHTML="";const W=el.clientWidth||520;
   const cloud=svgEl("g",{},svg);
   svgEl("rect",{x:cx-48,y:iy-16,width:96,height:32,rx:16,fill:inetOk?css("--ok-soft"):css("--bad-soft"),stroke:inetOk?css("--ok"):css("--bad")},cloud);
   const ct=svgEl("text",{x:cx,y:iy+4,"text-anchor":"middle",class:"lbl"},cloud);ct.textContent="Internet";
-  // wąski ekran: dwa rzędy - zewnętrzne satelity wyżej, wewnętrzne niżej (linie przechodzą między ramkami)
-  const top=twoRows?Math.ceil(sats.length/2):sats.length,bot=sats.length-top;
-  const bw=twoRows?Math.min(100,(W-36)/3):Math.min(118,Math.max(84,(W-24)/Math.max(1,sats.length)-12));
-  const posX=i=>{if(!twoRows)return sats.length===1?cx:12+bw/2+i*((W-24-bw)/Math.max(1,sats.length-1));
-    const outer=i%2===0,j=Math.floor(i/2),cnt=outer?top:bot;
-    if(outer)return cnt===1?cx:6+bw/2+j*((W-12-bw)/(cnt-1));
-    return cnt===1?cx:W*0.33+j*(W*0.34/(cnt-1))};
-  const connText=n=>n.wired&&n.radio?"radio!":n.wired?"kabel":(n.signal_dbm!=null?n.signal_dbm+" dBm":"radio");
-  sats.forEach((n,i)=>{const x=posX(i);
-    const sy=twoRows&&i%2===0?sy0-64:sy0;
-    const radio=!n.wired||n.radio;
-    const ln=svgEl("line",{x1:cx,y1:my+24,x2:x,y2:sy-22,stroke:col(n),"stroke-width":radio?2:3.5,"stroke-dasharray":radio?"6 5":""},svg);
-    hover(ln,`<b>${esc(master?.name||"główne")} ↔ ${esc(n.name)}</b><br>${n.wired&&n.radio?"⚠ kabel zgubiony – połączenie przez radio":esc(n.conn)}${n.signal_dbm!=null?`<br>sygnał ${n.signal_dbm} dBm`:""}`);
-    if(!twoRows){  // etykieta tuż nad satelitą (tam linie są już rozsunięte); w dwóch rzędach - w ramce
-      const f=0.78,lx=cx+(x-cx)*f,ly=my+24+(sy-22-my-24)*f;
-      const lt=svgEl("text",{x:lx+(x<cx?-8:x>cx?8:10),y:ly,"text-anchor":x<cx?"end":"start"},svg);
-      lt.textContent=connText(n);
-      if(n.wired&&n.radio)lt.setAttribute("style",`fill:${css("--warn")};font-weight:600`)}
-    node(x,sy,n,false)});
+  const connText=n=>n.wired&&n.radio?"radio!":n.wired?(n.bh_speed?`kabel ${n.bh_speed}`:"kabel"):(n.signal_dbm!=null?n.signal_dbm+" dBm":"radio");
+  const labels=[];
+  sats.forEach(n=>{const p=byName[parentOf(n)];if(!p||!pos[n.name])return;
+    const x1=X(p),y1=Y(p)+22,x2=X(n),y2=Y(n)-22,radio=!n.wired||n.radio;
+    const ln=svgEl("line",{x1,y1,x2,y2,stroke:col(n),"stroke-width":radio?2:3.5,"stroke-dasharray":radio?"6 5":""},svg);
+    hover(ln,`<b>${esc(p.name)} ↔ ${esc(n.name)}</b><br>${n.wired&&n.radio?"⚠ kabel zgubiony – połączenie przez radio":esc(n.conn)}${n.signal_dbm!=null?`<br>sygnał ${n.signal_dbm} dBm`:""}${n.parent?"":"<br><span class=\"muted\">rodzic nieznany – założono główne Deco</span>"}`);
+    labels.push([x1+(x2-x1)*0.55,y1+(y2-y1)*0.55,n])});
+  labels.forEach(([lx,ly,n])=>{  // etykiety po liniach, na podkładzie w kolorze karty
+    const bg=svgEl("rect",{fill:css("--card"),rx:3},svg);
+    const lt=svgEl("text",{x:lx,y:ly+4,"text-anchor":"middle"},svg);
+    lt.textContent=connText(n);
+    if(n.wired&&n.radio)lt.setAttribute("style",`fill:${css("--warn")};font-weight:600`);
+    try{const bb=lt.getBBox();Object.entries({x:bb.x-3,y:bb.y-1,width:bb.width+6,height:bb.height+2}).forEach(([k,v])=>bg.setAttribute(k,v))}catch(e){bg.remove()}});
+  sats.forEach(n=>{if(pos[n.name])node(X(n),Y(n),n,false)});
   if(master)node(cx,my,master,true);
   function node(x,y,n,isM){const g=svgEl("g",{},svg);const w=isM?132:bw;
     svgEl("rect",{x:x-w/2,y:y-22,width:w,height:44,rx:10,fill:css("--card"),stroke:col(n),"stroke-width":2},g);
     svgEl("circle",{cx:x-w/2+11,cy:y,r:4.5,fill:col(n)},g);
     const max=Math.floor((w-26)/7.2);
     const t1=svgEl("text",{x:x+6,y:y-3,"text-anchor":"middle",class:"lbl"},g);t1.textContent=n.name.length>max?n.name.slice(0,max-1)+"…":n.name;
-    const t2=svgEl("text",{x:x+6,y:y+12,"text-anchor":"middle"},g);
-    t2.textContent=twoRows&&!isM?`${n.model||""} · ${connText(n)}`:(n.model||"");
-    if(twoRows&&!isM&&n.wired&&n.radio)t2.setAttribute("style",`fill:${css("--warn")};font-weight:600`);
-    hover(g,`<b>${esc(n.name)}</b> · ${esc(n.model)}<br>${esc(n.ip)}<br>${n.online?"online":"<b>offline</b>"} · ${esc(n.conn)}${n.fw?`<br><span class="muted">fw ${esc(n.fw)}</span>`:""}`)}
-  const wired=sats.filter(n=>n.wired).length;$("#meshinfo").textContent=`${s.nodes.length} węzły · ${wired} na kablu`;
+    const t2=svgEl("text",{x:x+6,y:y+12,"text-anchor":"middle"},g);t2.textContent=n.model||"";
+    hover(g,`<b>${esc(n.name)}</b> · ${esc(n.model)}<br>${esc(n.ip)}<br>${n.online?"online":"<b>offline</b>"} · ${esc(n.conn)}${!isM?`<br>podłączony do: ${esc(n.parent||"nieznany")}`:""}${n.fw?`<br><span class="muted">fw ${esc(n.fw)}</span>`:""}`)}
+  const wired=sats.filter(n=>n.wired).length;
+  $("#meshinfo").textContent=`${s.nodes.length} węzły · ${wired} na kablu${maxD>1?` · do ${maxD} skoków`:""}`;
 }
 
 /* ---------- przedni panel switcha ---------- */

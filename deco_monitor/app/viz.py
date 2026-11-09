@@ -96,6 +96,9 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
             open_.setdefault(("node", data.get("node")), t)
         elif typ == "node_online":
             close(("node", data.get("node")), t, f"Satelita {data.get('node')}", "mesh", "problem", "offline")
+        elif typ == "node_parent_change":
+            lane(f"Satelita {data.get('node')}", "mesh")["points"].append(
+                [t, f"podłączona do {data.get('to')} (było: {data.get('from')})", "warning"])
         elif typ == "switch_port_down":
             open_.setdefault(("port", data.get("port")), t)
         elif typ == "switch_port_up":

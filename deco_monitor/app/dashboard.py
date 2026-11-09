@@ -118,6 +118,9 @@ def _build(mon) -> dict:
         radio = e.get(f"node_{name}_radio")
         sig = e.get(f"node_{name}_signal")
         secondary = f"{{{{ states('{conn}') }}}}"
+        parent = e.get(f"node_{name}_parent")
+        if parent:
+            secondary = f"→ {{{{ states('{parent}') }}}} · " + secondary
         if sig:
             secondary += f" · {{{{ states('{sig}') }}}} dBm"
         speed = e.get(f"node_{name}_bh_speed")
@@ -177,6 +180,8 @@ def _build(mon) -> dict:
                 event_card,
             ]},
             {"type": "grid", "columns": 2, "square": False, "title": "Węzły Deco", "cards": node_cards},
+            {"type": "markdown", "title": "Topologia mesh (kto do kogo jest podłączony)",
+             "content": f"{{{{ state_attr('{st('mesh_topology')}', 'drzewo') or 'brak danych' }}}}"},
             {"type": "grid", "columns": 2, "square": False, "title": "Ping", "cards": ping_cards},
             {"type": "history-graph", "title": "Oś czasu: internet i WAN (24 h)", "hours_to_show": 24,
              "entities": timeline_wan},

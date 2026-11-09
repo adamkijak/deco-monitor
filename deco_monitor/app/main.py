@@ -39,7 +39,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -72,6 +72,74 @@ def parse_speed(value) -> int | None:
     except (TypeError, ValueError):
         return None
     return speed if speed > 0 else None
+
+
+def _norm_mac(mac) -> str:
+    return str(mac or "").upper().replace(":", "-")
+
+
+def resolve_parents(devs: list, name_of) -> dict:
+    """Węzeł nadrzędny (uplink) każdej satelity: nazwa -> nazwa rodzica albo None (nie wiadomo).
+
+    X50 podaje parent_device_id; główne Deco nie ma device_id we własnym rekordzie, więc nieznany
+    identyfikator = główne Deco. M3W nie podaje parent_device_id, ale ma pole "previous" z MAC-iem
+    rodzica - używane tylko jako zapas."""
+    ids, macs, master = {}, {}, None
+    for dev in devs:
+        name = name_of(dev)
+        if dev.get("device_id"):
+            ids[dev["device_id"]] = name
+        if dev.get("mac"):
+            macs[_norm_mac(dev["mac"])] = name
+        if dev.get("role") == "master":
+            master = name
+    out = {}
+    for dev in devs:
+        name = name_of(dev)
+        if dev.get("role") == "master":
+            continue
+        pid, prev = dev.get("parent_device_id"), _norm_mac(dev.get("previous"))
+        parent = ids.get(pid) if pid else None
+        if parent is None and prev:
+            parent = macs.get(prev)
+        if parent is None and pid:
+            parent = master
+        out[name] = parent if parent != name else None
+    return out
+
+
+def topology_text(nodes: dict) -> tuple[str, str]:
+    """(krótki stan, drzewo w markdown) z węzłów z polem "parent"."""
+    master = next((n for n, i in nodes.items() if i.get("master")), None)
+    kids: dict = {}
+    for n, i in nodes.items():
+        if not i.get("master"):
+            kids.setdefault(i.get("parent") if i.get("parent") in nodes else master, []).append(n)
+    lines, seen = [], set()
+
+    def walk(n, depth):
+        if n in seen:
+            return
+        seen.add(n)
+        i = nodes[n]
+        desc = "główne Deco" if i.get("master") else i.get("conn", "")
+        if i.get("bh_speed"):
+            desc += f" {i['bh_speed']} Mbit/s"
+        if i.get("signal_dbm") is not None:
+            desc += f", {i['signal_dbm']} dBm"
+        if not i.get("online", True):
+            desc += ", **offline**"
+        lines.append(f"{'&nbsp;' * 4 * depth}{'└ ' if depth else ''}**{n}** – {desc}")
+        for k in sorted(kids.get(n, [])):
+            walk(k, depth + 1)
+
+    if master:
+        walk(master, 0)
+    for n in sorted(nodes):  # bez znanego rodzica / cykl
+        walk(n, 1)
+    short = " | ".join(f"{p}: {', '.join(sorted(c))}" for p, c in sorted(kids.items(), key=lambda kv: kv[0] != master)
+                       if p)
+    return short[:250] or "brak danych", "  \n".join(lines)
 
 
 def load_json(path: str, default):
@@ -209,6 +277,7 @@ class Monitor:
         self.ent("wan_link", "binary_sensor", "Kabel WAN", icon="mdi:ethernet-cable", **conn)
         self.ent("internet", "binary_sensor", "Internet", **conn)
         self.ent("wan_ip", "sensor", "Adres IP WAN", icon="mdi:ip")
+        self.ent("mesh_topology", "sensor", "Topologia mesh", attrs=True, icon="mdi:sitemap")
         self.ent("cpu", "sensor", "CPU Deco", unit_of_measurement="%", state_class="measurement",
                  icon="mdi:cpu-64-bit")
         self.ent("mem", "sensor", "RAM Deco", unit_of_measurement="%", state_class="measurement",
@@ -285,6 +354,7 @@ class Monitor:
         if not master:
             self.ent(f"node_{name}_radio", "binary_sensor", f"{name} backhaul radiowy",
                      icon="mdi:access-point")
+            self.ent(f"node_{name}_parent", "sensor", f"{name} podłączony do", icon="mdi:source-branch")
         if has_signal:
             self.ent(f"node_{name}_signal", "sensor", f"{name} sygnał", unit_of_measurement="dBm",
                      device_class="signal_strength", state_class="measurement")
@@ -466,10 +536,14 @@ class Monitor:
         self.set("clients_wifi", wifi)
         self.set("clients_wired", len(clients) - wifi)
 
+        def name_of(dev):
+            return b64_name(dev.get("custom_nickname", "")) or dev.get("nickname") or dev.get("device_model", "?")
+
+        parents = resolve_parents(devs, name_of)
         node_list = []
         for dev in devs:
             master = dev.get("role") == "master"
-            name = b64_name(dev.get("custom_nickname", "")) or dev.get("nickname") or dev.get("device_model", "?")
+            name = name_of(dev)
             conn = dev.get("connection_type") or []
             wired = "wired" in conn
             if master:
@@ -487,6 +561,7 @@ class Monitor:
                 "inet": dev.get("inet_status"), "fw": dev.get("software_ver"),
                 "macs": [m for m in (dev.get("mac"), dev.get("bssid_2g"), dev.get("bssid_5g")) if m],
                 "bh_speed": parse_speed(dev.get("backhual_speed")) if wired and not master else None,
+                "parent": parents.get(name),
             }
             node_list.append(info)
             self._register_node(name, master, sig is not None)
@@ -500,6 +575,10 @@ class Monitor:
                 if prev["conn"] != conn_text:
                     self.emit("node_backhaul_change", f"Węzeł {name}: połączenie {prev['conn']} → {conn_text}",
                               "warning", now, {"node": name, "from": prev["conn"], "to": conn_text})
+                old_p, new_p = prev.get("parent"), info["parent"]
+                if old_p and new_p and old_p != new_p:
+                    self.emit("node_parent_change", f"Węzeł {name}: podłączony do {new_p} (było: {old_p})",
+                              "warning", now, {"node": name, "from": old_p, "to": new_p})
                 old_sp, new_sp = prev.get("bh_speed"), info["bh_speed"]
                 if old_sp and new_sp and old_sp != new_sp:
                     self.emit("node_backhaul_speed",
@@ -515,12 +594,16 @@ class Monitor:
             self.set(f"node_{name}_conn", conn_text,
                      {k: v for k, v in info.items() if k not in ("macs",)})
             self.set(f"node_{name}_online", online)
+            if not master:
+                self.set(f"node_{name}_parent", info["parent"] or "nieznany")
             if not master and self.log_state_at.get(f"radio_backhaul:{name}", 0) < recent:
                 self.set(f"node_{name}_radio", not wired)
             if sig is not None:
                 self.set(f"node_{name}_signal", sig)
             if self.opts.get("ping_mesh_nodes", True) and not master and info["ip"]:
                 self.add_ping_target(f"mesh_{slugify(name)}", f"Satelita {name}", info["ip"], "mesh")
+        short, tree = topology_text({n["name"]: n for n in node_list})
+        self.set("mesh_topology", short, {"drzewo": tree})
         self.analyzer.update_nodes(node_list)
         if self.satlogs:
             self.satlogs.update_nodes(node_list)

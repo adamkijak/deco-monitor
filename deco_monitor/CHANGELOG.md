@@ -1,5 +1,17 @@
 # Zmiany
 
+## 1.3.2
+
+- **Kto do kogo jest podłączony.** Dla każdej satelity nowy czujnik `sensor.<satelita>_podlaczony_do` z nazwą
+  węzła nadrzędnego, przez który satelita łączy się z siecią (np. kuchnia → salon albo kuchnia → Poddasze).
+  X50 podaje go wprost (`parent_device_id`); M3W nie podaje, więc dodatek bierze MAC rodzica z pola `previous`.
+- Zmiana rodzica to zdarzenie „Węzeł X: podłączony do Y (było: Z)” (ostrzeżenie, typ `node_parent_change`).
+  Zdarzenie trafia do dziennika i jako punkt na pas satelity na osi czasu.
+- Czujnik `sensor.deco_monitor_topologia_mesh`: krótki opis drzewa w stanie, pełne drzewo w markdownie
+  w atrybucie `drzewo`.
+- Pulpit „Sieć Deco”: kafelki węzłów zaczynają się od „→ rodzic”, a przegląd ma nową kartę „Topologia mesh”.
+- Panel: mapa mesh rysuje prawdziwe drzewo połączeń (satelita pod swoim rodzicem) zamiast gwiazdy wokół głównego Deco.
+
 ## 1.3.1
 
 - **Prędkość kabla do satelit.** Nowy czujnik `sensor.<satelita>_predkosc_kabla` (Mbit/s) dla każdej satelity

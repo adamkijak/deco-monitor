@@ -78,6 +78,7 @@ EVENT_TYPES = [
     "node_online",
     "node_backhaul_change",
     "node_backhaul_speed",
+    "node_parent_change",
     "incident",
 ]
 

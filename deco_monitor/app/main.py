@@ -39,7 +39,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.3"
+VERSION = "1.3.4"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -190,6 +190,7 @@ class Monitor:
             self.satlogs = SatelliteLogs(self.store, opts["deco_password"],
                                          float(opts.get("satellite_syslog_interval", 300)))
         self.analyzer = LogAnalyzer()
+        self.analyzer.node_ips = load_json(os.path.join(self.data_dir, "node_ips.json"), {})
         self.dedup = LineDeduper()
         self.syslog_interval = float(opts.get("syslog_interval", 10))
         # zdarzenia z logu publikujemy z przesunięciem `lag`, zachowując odstępy czasowe
@@ -606,7 +607,10 @@ class Monitor:
                 self.add_ping_target(f"mesh_{slugify(name)}", f"Satelita {name}", info["ip"], "mesh")
         short, tree = topology_text({n["name"]: n for n in node_list})
         self.set("mesh_topology", short, {"drzewo": tree})
+        known_ips = dict(self.analyzer.node_ips)
         self.analyzer.update_nodes(node_list)
+        if self.analyzer.node_ips != known_ips:
+            save_json(os.path.join(self.data_dir, "node_ips.json"), self.analyzer.node_ips)
         if self.satlogs:
             self.satlogs.update_nodes(node_list)
         self.status["deco"] = "OK"

@@ -146,7 +146,9 @@ class LogAnalyzer:
                 t = mac_tail(mac)
                 if t:
                     sats[t] = {"name": n["name"], "wired": n.get("wired", False)}
-        self.satellites, self.node_ips = sats, ips
+        # IP -> nazwa zapamiętujemy na stałe: węzeł offline nie ma device_ip w liście węzłów, a właśnie
+        # wtedy w logu pojawia się "ssh_connect: Timeout connecting to <IP>"
+        self.satellites, self.node_ips = sats, {**self.node_ips, **ips}
 
     def analyze(self, ln: LogLine) -> list:
         if ln.time is None:

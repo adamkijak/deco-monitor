@@ -291,6 +291,35 @@ class ImportantFilterTest(unittest.TestCase):
         self.assertEqual([is_important(l) for l in important], [True] * len(important))
 
 
+class OfflineNodeNameTest(unittest.TestCase):
+    def test_unreachable_offline_node_keeps_name(self):
+        a = LogAnalyzer()
+        a.update_nodes([{"name": "hallway", "ip": "192.168.71.248", "macs": []}])
+        a.update_nodes([{"name": "hallway", "ip": None, "macs": []}])  # offline: Deco nie podaje IP
+        ev = a.analyze(parse_line("Mon Nov  9 10:44:18 2026 user.err : Error: ssh_connect: "
+                                  "Timeout connecting to 192.168.71.248"))
+        un = [e for e in ev if e.type == "mesh_node_unreachable"]
+        self.assertEqual(un[0].data["node"], "hallway")
+        self.assertIn("satelitą hallway", un[0].message)
+
+    def test_timeline_merges_ip_lanes(self):
+        import time as _t
+        from types import SimpleNamespace
+
+        import viz
+        now = _t.time()
+        iso = datetime.fromtimestamp(now - 60).isoformat(timespec="seconds")
+        evs = [{"time": iso, "type": "mesh_node_unreachable", "severity": "warning",
+                "data": {"node": "192.168.71.248", "ip": "192.168.71.248"}}]
+        store = SimpleNamespace(events_since=lambda ts: evs, incidents_since=lambda ts: [])
+        mon = SimpleNamespace(ping_meta={}, pinger=SimpleNamespace(targets={}), values={},
+                              nodes={"hallway": {"master": False, "ip": None, "wired": False}},
+                              analyzer=SimpleNamespace(node_ips={"192.168.71.248": "hallway"}))
+        names = [ln["name"] for ln in viz.timeline(store, mon, 1)["lanes"]]
+        self.assertIn("Satelita hallway", names)
+        self.assertNotIn("Satelita 192.168.71.248", names)
+
+
 class MiscTest(unittest.TestCase):
     def test_slugify_like_home_assistant(self):
         self.assertEqual(slugify("Ping Deco główne opóźnienie"), "ping_deco_glowne_opoznienie")

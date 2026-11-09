@@ -1,5 +1,14 @@
 # Zmiany
 
+## 1.3.4
+
+- **Poprawka: satelity pod samym adresem IP.** „Główne Deco nie może połączyć się z satelitą …” pochodzi z logu,
+  w którym jest tylko IP. Nazwa była brana z bieżącej listy węzłów, a w niej satelita offline nie ma adresu IP,
+  więc właśnie niedostępna satelita zostawała pod samym IP. Na osi czasu powstawały przez to dodatkowe pasy
+  „Satelita 192.168.71.x”, a w incydentach ta sama satelita pojawiała się dwa razy (pod IP i pod nazwą).
+  Dodatek pamięta teraz IP każdego węzła, także po restarcie (`node_ips.json`).
+- Oś czasu przypisuje też starsze zdarzenia z samym IP do pasa właściwej satelity.
+
 ## 1.3.3
 
 - **Poprawka: fałszywy „Brak internetu” w incydentach.** Incydent dostawał przyczynę „Brak internetu (kabel WAN OK)”,

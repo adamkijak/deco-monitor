@@ -58,6 +58,9 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
         if not info["master"]:
             lane(f"Satelita {name}", "mesh")
     lane("Zdarzenia Deco", "dev")
+    # starsze zdarzenia "nie może połączyć się z satelitą" mają czasem samo IP zamiast nazwy
+    ip_names = dict(getattr(getattr(mon, "analyzer", None), "node_ips", None) or {})
+    ip_names.update({i["ip"]: n for n, i in mon.nodes.items() if i.get("ip")})
 
     open_: dict = {}
 
@@ -90,7 +93,8 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
             node = data.get("node")
             close(("radio", node), t, f"Satelita {node}", "mesh", "warning", "na radiu zamiast kabla")
         elif typ == "mesh_node_unreachable":
-            lane(f"Satelita {data.get('node')}", "mesh")["points"].append([t, "niedostępna dla głównego Deco",
+            node = ip_names.get(data.get("node"), data.get("node"))
+            lane(f"Satelita {node}", "mesh")["points"].append([t, "niedostępna dla głównego Deco",
                                                                             "warning"])
         elif typ == "node_offline":
             open_.setdefault(("node", data.get("node")), t)

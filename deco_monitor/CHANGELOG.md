@@ -1,5 +1,14 @@
 # Zmiany
 
+## 1.3.3
+
+- **Poprawka: fałszywy „Brak internetu” w incydentach.** Incydent dostawał przyczynę „Brak internetu (kabel WAN OK)”,
+  gdy w trakcie choć raz nie odpowiedział jeden z celów pingu w internecie. Tak 5 s bez odpowiedzi z Cloudflare
+  przemianowało 2-godzinną pętlę rozłączeń satelity na brak internetu. Teraz ta przyczyna wymaga, żeby wszystkie
+  cele w internecie milczały jednocześnie albo żeby samo Deco zgłosiło brak internetu.
+- Gdy nie odpowiada tylko część celów, a nic innego się nie działo, przyczyna brzmi
+  „Brak pingu do Cloudflare (internet działał)”.
+
 ## 1.3.2
 
 - **Kto do kogo jest podłączony.** Dla każdej satelity nowy czujnik `sensor.<satelita>_podlaczony_do` z nazwą

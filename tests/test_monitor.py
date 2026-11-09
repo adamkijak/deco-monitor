@@ -194,6 +194,32 @@ class IncidentTest(unittest.TestCase):
         self.assertIn("na radiu: bedroom", inc["summary"])
         self.assertIn("brak pingu: Google DNS", inc["summary"])
 
+    def test_internet_needs_all_targets_down(self):
+        t0 = datetime(2026, 11, 9, 9, 12, 24).timestamp()
+
+        def ping(ts, typ, name, kind):
+            return {"ts": ts, "type": typ, "text": "ping", "severity": "problem" if typ == "ping_down" else "info",
+                    "data": {"name": name, "kind": kind}}
+        hallway = [ping(t0, "ping_down", "Satelita hallway", "mesh"), ping(t0 + 6000, "ping_up", "Satelita hallway", "mesh")]
+        cf = [ping(t0 + 100, "ping_down", "Cloudflare", "internet"), ping(t0 + 105, "ping_up", "Cloudflare", "internet")]
+        targets = {"Google DNS", "Cloudflare"}
+        # 9.11: 5 s bez Cloudflare w środku 2-godzinnej pętli hallway - to nie był brak internetu
+        inc = summarize({"items": hallway + cf}, targets)
+        self.assertEqual(inc["cause"], "Satelita niedostępna: Satelita hallway")
+        self.assertIn("brak pingu: Cloudflare, Satelita hallway", inc["summary"])
+        inc = summarize({"items": cf}, targets)
+        self.assertEqual(inc["cause"], "Brak pingu do Cloudflare (internet działał)")
+        # oba cele naraz -> brak internetu
+        both = cf[:1] + [ping(t0 + 101, "ping_down", "Google DNS", "internet")] + cf[1:]
+        self.assertEqual(summarize({"items": hallway + both}, targets)["cause"], "Brak internetu (kabel WAN OK)")
+        # oba, ale nie jednocześnie -> nie
+        later = [ping(t0 + 200, "ping_down", "Google DNS", "internet"), ping(t0 + 203, "ping_up", "Google DNS", "internet")]
+        self.assertNotEqual(summarize({"items": cf + later}, targets)["cause"], "Brak internetu (kabel WAN OK)")
+        # zgłoszenie od Deco wystarcza; bez listy celów - zachowanie jak dawniej
+        offline = [{"ts": t0 + 50, "type": "internet_offline", "text": "Deco", "severity": "problem", "data": {}}]
+        self.assertEqual(summarize({"items": hallway + offline}, targets)["cause"], "Brak internetu (kabel WAN OK)")
+        self.assertEqual(summarize({"items": hallway + cf})["cause"], "Brak internetu (kabel WAN OK)")
+
     def test_devices_in_incident(self):
         t0 = datetime(2026, 11, 3, 19, 4, 26).timestamp()
         dev = {"mac": "7c:00:e5:5c:a2:77", "name": "OnePlus-13", "band": "5 GHz"}

@@ -39,7 +39,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -195,6 +195,8 @@ class Monitor:
         # zdarzenia z logu publikujemy z przesunięciem `lag`, zachowując odstępy czasowe
         self.lag = self.syslog_interval + 5
         self.incidents = IncidentTracker(self.lag + 20, self._incident_closed)
+        self.incidents.internet_targets = lambda: {m["name"] for m in self.ping_meta.values()
+                                                   if m["kind"] == "internet"}
         self.pinger = Pinger(float(opts.get("ping_interval", 2)), 2, self._ping_change)
 
         self.counters = load_json(os.path.join(self.data_dir, "counters.json"), {})

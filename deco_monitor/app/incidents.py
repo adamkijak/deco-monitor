@@ -22,6 +22,8 @@ class IncidentTracker:
         self.on_close = on_close
         self._lock = threading.Lock()
         self._open: dict | None = None
+        # nazwy wszystkich celów pingu w internecie (ustawia monitor) - "brak internetu" tylko gdy milczą wszystkie
+        self.internet_targets = lambda: set()
 
     def signal(self, ts: float, etype: str, text: str, severity: str, data: dict | None = None,
                extend: bool = True) -> None:
@@ -51,7 +53,7 @@ class IncidentTracker:
             if time.time() - inc["last_signal"] < self.quiet_s:
                 return
             self._open = None
-        self.on_close(summarize(inc))
+        self.on_close(summarize(inc, self.internet_targets()))
 
 
 def _devices(items: list) -> list:
@@ -73,7 +75,27 @@ def _devices(items: list) -> list:
     return sorted(devs.values(), key=lambda x: x["pierwsze"] or "")
 
 
-def summarize(inc: dict) -> dict:
+def _all_down_at_once(items: list, targets: set) -> bool:
+    """Czy w którymś momencie wszystkie cele z `targets` jednocześnie nie odpowiadały na ping."""
+    if not targets:
+        return False
+    down: set = set()
+    for i in items:
+        name = i["data"].get("name")
+        if i["data"].get("kind") != "internet" or name is None:
+            continue
+        if i["type"] == "ping_down":
+            down.add(name)
+            if targets <= down:
+                return True
+        elif i["type"] == "ping_up":
+            down.discard(name)
+    return False
+
+
+def summarize(inc: dict, internet_targets: set | None = None) -> dict:
+    """internet_targets: nazwy wszystkich celów pingu w internecie. Brak (None) = jak dawniej:
+    każdy zanik pingu do internetu liczy się jako brak internetu."""
     all_items = sorted(inc["items"], key=lambda i: i["ts"])
     devices = _devices(all_items)
     items = [i for i in all_items if not i["type"].startswith("_")]
@@ -100,7 +122,8 @@ def summarize(inc: dict) -> dict:
         cause = "Restart głównego Deco"
     elif "failover_to_mobile" in tset:
         cause = "Przełączenie na LTE (łącze zapasowe)"
-    elif "internet_offline" in tset or pings("internet"):
+    elif "internet_offline" in tset or (
+            _all_down_at_once(all_items, set(internet_targets)) if internet_targets else pings("internet")):
         cause = "Brak internetu (kabel WAN OK)"
     elif pings("local"):
         cause = "Sieć lokalna niedostępna: " + ", ".join(sorted({i["data"].get("name", "?") for i in pings("local")}))
@@ -114,6 +137,9 @@ def summarize(inc: dict) -> dict:
         cause = "Masowe rozłączenie klientów WiFi"
     elif "node_offline" in tset:
         cause = "Węzeł Deco offline"
+    elif pings("internet"):  # tylko część celów w internecie - reszta odpowiadała
+        cause = ("Brak pingu do " + ", ".join(sorted({i["data"].get("name", "?") for i in pings("internet")}))
+                 + " (internet działał)")
     else:
         cause = items[0]["text"]
 

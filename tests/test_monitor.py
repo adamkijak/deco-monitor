@@ -320,6 +320,118 @@ class OfflineNodeNameTest(unittest.TestCase):
         self.assertNotIn("Satelita 192.168.71.248", names)
 
 
+class RemovedNodeTest(unittest.TestCase):
+    """1.3.5: węzeł usunięty z sieci Deco (np. hallway M3W) znika z osi czasu, pingu i HA."""
+
+    def _timeline(self, evs, nodes, ping_meta=None):
+        from types import SimpleNamespace
+
+        import viz
+        store = SimpleNamespace(events_since=lambda ts: evs, incidents_since=lambda ts: [])
+        mon = SimpleNamespace(ping_meta=ping_meta or {}, pinger=SimpleNamespace(targets={}), values={},
+                              nodes=nodes, analyzer=SimpleNamespace(node_ips={"192.168.71.248": "hallway"}))
+        return {ln["name"]: ln for ln in viz.timeline(store, mon, 1)["lanes"]}
+
+    @staticmethod
+    def _ev(ago, typ, data):
+        import time as _t
+        iso = datetime.fromtimestamp(_t.time() - ago).isoformat(timespec="seconds")
+        return {"time": iso, "type": typ, "severity": "problem", "data": data}
+
+    NODES = {"Poddasze": {"master": True, "ip": "192.168.68.1"},
+             "bedroom": {"master": False, "ip": "192.168.71.249", "wired": False}}
+
+    def test_removed_satellite_lanes_hidden(self):
+        ping = {"name": "Satelita hallway", "host": "192.168.71.248", "kind": "mesh"}
+        evs = [self._ev(900, "node_offline", {"node": "hallway"}),
+               self._ev(800, "ping_down", ping), self._ev(700, "ping_up", ping),
+               self._ev(600, "ping_down", ping),  # nigdy nie zamknięty: węzeł usunięto
+               self._ev(500, "mesh_node_unreachable", {"node": "192.168.71.248"}),
+               self._ev(400, "node_offline", {"node": "bedroom"})]
+        lanes = self._timeline(evs, self.NODES)
+        self.assertNotIn("Satelita hallway", lanes)
+        self.assertNotIn("Ping Satelita hallway", lanes)
+        self.assertIn("Satelita bedroom", lanes)
+
+    def test_nothing_hidden_before_first_device_list(self):
+        evs = [self._ev(400, "node_offline", {"node": "bedroom"}), self._ev(300, "node_online", {"node": "bedroom"})]
+        self.assertIn("Satelita bedroom", self._timeline(evs, {}))
+
+    def test_unclosed_ping_keeps_kind_from_event(self):
+        ping = {"name": "Stary cel", "host": "10.0.0.9", "kind": "internet"}
+        lanes = self._timeline([self._ev(300, "ping_down", ping)], self.NODES)
+        self.assertEqual(lanes["Ping Stary cel"]["group"], "internet")
+
+    def test_forget_node_after_missing_polls(self):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        import main
+        fake = SimpleNamespace(nodes={"Poddasze": {}, "bedroom": {}, "hallway": {}}, _node_missing={},
+                               ping_meta={"mesh_hallway": {}, "mesh_bedroom": {}},
+                               ents={"node_hallway_online": "binary_sensor.deco_monitor_hallway_online",
+                                     "node_hallway_conn": "sensor.deco_monitor_hallway_polaczenie",
+                                     "ping_mesh_hallway": "binary_sensor.deco_monitor_ping_satelita_hallway",
+                                     "ping_mesh_hallway_rtt": "x_rtt", "ping_mesh_hallway_loss": "x_loss",
+                                     "node_bedroom_online": "binary_sensor.deco_monitor_bedroom_online"},
+                               values={}, pub=mock.Mock(), pinger=mock.Mock(), satlogs=mock.Mock())
+        fake._forget_node = lambda name: main.Monitor._forget_node(fake, name)
+        for _ in range(main.NODE_GONE_POLLS - 1):
+            main.Monitor._prune_missing_nodes(fake, {"Poddasze", "bedroom"})
+        self.assertIn("hallway", fake.nodes)
+        main.Monitor._prune_missing_nodes(fake, {"Poddasze", "bedroom"})
+        self.assertNotIn("hallway", fake.nodes)
+        self.assertEqual(sorted(fake.ents), ["node_bedroom_online"])
+        self.assertEqual(fake.pub.remove.call_count, 5)
+        fake.pinger.remove_target.assert_called_once_with("mesh_hallway")
+        fake.satlogs.remove_node.assert_called_once_with("hallway")
+        self.assertNotIn("mesh_hallway", fake.ping_meta)
+
+    def test_node_back_resets_counter(self):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        import main
+        fake = SimpleNamespace(nodes={"hallway": {}}, _node_missing={}, _forget_node=mock.Mock())
+        for _ in range(main.NODE_GONE_POLLS - 1):
+            main.Monitor._prune_missing_nodes(fake, set())
+        main.Monitor._prune_missing_nodes(fake, {"hallway"})
+        for _ in range(main.NODE_GONE_POLLS - 1):
+            main.Monitor._prune_missing_nodes(fake, set())
+        fake._forget_node.assert_not_called()
+
+    def test_publisher_remove_and_stale_topics(self):
+        from mqtt_pub import Publisher, is_stale_discovery_topic
+        p = Publisher(None, 1883, None, None, "t")
+        sent = []
+        p._raw = lambda topic, payload, retain=False: sent.append((topic, payload, retain))
+        key = p.entity("sensor", "hallway połączenie", attrs=True)
+        p.state(key, "radio")
+        sent.clear()
+        p.remove(key)
+        self.assertIn(("homeassistant/sensor/deco_monitor/deco_monitor_hallway_polaczenie/config", "", True), sent)
+        self.assertIn(("deco_monitor/sensor/hallway_polaczenie/state", "", True), sent)
+        self.assertEqual(p.entity_ids(), [])
+        sent.clear()
+        p._republish()
+        self.assertNotIn("deco_monitor/sensor/hallway_polaczenie/state", [t for t, _, _ in sent])
+        self.assertTrue(is_stale_discovery_topic(
+            "homeassistant/sensor/deco_monitor/sensor.deco_monitor_hallway_polaczenie/config"))
+        self.assertFalse(is_stale_discovery_topic(
+            "homeassistant/sensor/deco_monitor/deco_monitor_hallway_polaczenie/config"))
+
+    def test_republish_uses_discovery_topic(self):
+        from mqtt_pub import Publisher
+        p = Publisher(None, 1883, None, None, "t")
+        sent = []
+        p._raw = lambda topic, payload, retain=False: sent.append(topic)
+        p.entity("binary_sensor", "bedroom online")
+        sent.clear()
+        p._republish()
+        self.assertIn("homeassistant/binary_sensor/deco_monitor/deco_monitor_bedroom_online/config", sent)
+        self.assertFalse([t for t in sent if "/binary_sensor.deco_monitor" in t])
+
+
 class MiscTest(unittest.TestCase):
     def test_slugify_like_home_assistant(self):
         self.assertEqual(slugify("Ping Deco główne opóźnienie"), "ping_deco_glowne_opoznienie")

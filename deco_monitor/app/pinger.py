@@ -65,6 +65,10 @@ class Pinger:
             self.targets[key] = Target(key, name, host, kind)
             return True
 
+    def remove_target(self, key: str) -> bool:
+        with self._lock:
+            return self.targets.pop(key, None) is not None
+
     def _probe(self, t: Target) -> None:
         if self._busy(t.host):
             return

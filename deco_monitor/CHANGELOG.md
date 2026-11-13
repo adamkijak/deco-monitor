@@ -1,5 +1,19 @@
 # Zmiany
 
+## 1.3.5
+
+- **Węzeł usunięty z sieci Deco znika sam.** Gdy węzła nie ma na liście Deco przez 10 odczytów z rzędu (ok. 5 min),
+  dodatek przestaje go pingować i pobierać jego log, a jego encje znikają z Home Assistant. Węzeł offline nadal
+  jest na tej liście, więc to dotyczy tylko węzłów usuniętych w aplikacji Deco.
+- Oś czasu nie pokazuje pasów satelit, których nie ma już w sieci, także z ich wcześniejszą historią.
+- **Poprawka: pas „Ping Satelita …” po usunięciu węzła.** Przerwa w pingu, która nie zdążyła się zamknąć,
+  trafiała na osobny pas zwykłego pingu, bo rodzaj celu był brany tylko z bieżącej listy celów.
+  Teraz jest brany też z samego zdarzenia.
+- **Poprawka: zduplikowane konfiguracje MQTT.** Po restarcie Home Assistant dodatek publikował konfigurację encji
+  ponownie, ale pod złym tematem (`homeassistant/<domena>/deco_monitor/<domena>.deco_monitor_x/config`).
+  Te kopie zostawały w brokerze i po kolejnym restarcie HA odtwarzały encje, które już usunięto.
+  Ponowna publikacja używa teraz właściwego tematu, a dodatek przy połączeniu z MQTT usuwa stare kopie.
+
 ## 1.3.4
 
 - **Poprawka: satelity pod samym adresem IP.** „Główne Deco nie może połączyć się z satelitą …” pochodzi z logu,

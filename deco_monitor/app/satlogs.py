@@ -61,6 +61,10 @@ class SatelliteLogs:
             elif sat.host != n["ip"]:
                 sat.host, sat.client, sat.next_try = n["ip"], None, 0.0
 
+    def remove_node(self, name: str) -> None:
+        """Satelita usunięta z sieci Deco: bez dalszych prób pobierania jej logu (archiwum zostaje)."""
+        self.sats.pop(slugify(name) or "satelita", None)
+
     def names(self) -> dict:
         return {s.source: s.name for s in self.sats.values()}
 

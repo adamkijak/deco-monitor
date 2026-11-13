@@ -39,7 +39,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -62,6 +62,7 @@ COUNTERS = {
     "switch_resets": ("Restarty switcha", "mdi:restart-alert"),
 }
 
+NODE_GONE_POLLS = 10  # ok. 5 min przy api_interval 30 s
 CONN_TEXT = {"wired": "kabel", "band5": "radio 5 GHz", "band2_4": "radio 2,4 GHz", "band6": "radio 6 GHz"}
 
 
@@ -217,6 +218,7 @@ class Monitor:
         self.ents: dict = {}
         self.values: dict = {}  # ostatnie wartości (dla web UI)
         self.nodes: dict = {}  # nazwa -> info
+        self._node_missing: dict = {}  # nazwa -> ile odczytów z rzędu nie ma jej na liście Deco
         self.ping_meta: dict = {}  # key -> {"name","kind","host"}
         self.log_state_at: dict = {}  # klucz stanu -> czas ostatniej zmiany z logu
         self.recent_lines = deque(maxlen=40)
@@ -362,6 +364,33 @@ class Monitor:
             self.ent(f"node_{name}_signal", "sensor", f"{name} sygnał", unit_of_measurement="dBm",
                      device_class="signal_strength", state_class="measurement")
 
+    def _prune_missing_nodes(self, seen: set) -> None:
+        """Węzeł usunięty z sieci Deco znika z device_list (offline wciąż na niej jest).
+        Po NODE_GONE_POLLS odczytach z rzędu bez niego zapominamy go razem z encjami."""
+        for name in list(self.nodes):
+            if name in seen:
+                self._node_missing.pop(name, None)
+                continue
+            self._node_missing[name] = self._node_missing.get(name, 0) + 1
+            if self._node_missing[name] >= NODE_GONE_POLLS:
+                self._forget_node(name)
+
+    def _forget_node(self, name: str) -> None:
+        log.warning("Węzeł %s zniknął z sieci Deco - usuwam jego encje, ping i logi satelity", name)
+        self.nodes.pop(name, None)
+        self._node_missing.pop(name, None)
+        pkey = f"mesh_{slugify(name)}"
+        self.pinger.remove_target(pkey)
+        self.ping_meta.pop(pkey, None)
+        keys = [f"node_{name}_{s}" for s in ("conn", "online", "radio", "parent", "signal", "bh_speed")]
+        keys += [f"ping_{pkey}", f"ping_{pkey}_rtt", f"ping_{pkey}_loss"]
+        for k in keys:
+            if k in self.ents:
+                self.pub.remove(self.ents.pop(k))
+            self.values.pop(k, None)
+        if self.satlogs:
+            self.satlogs.remove_node(name)
+
     def _register_bh_speed(self, name: str) -> None:
         self.ent(f"node_{name}_bh_speed", "sensor", f"{name} prędkość kabla", unit_of_measurement="Mbit/s",
                  device_class="data_rate", state_class="measurement", icon="mdi:speedometer")
@@ -438,6 +467,8 @@ class Monitor:
 
     def _ping_change(self, target, up: bool, outage) -> None:
         key = target.key
+        if f"ping_{key}" not in self.ents:  # cel usunięty (węzeł zniknął z sieci) w trakcie pomiaru
+            return
         self.set(f"ping_{key}", up)
         data = {"name": target.name, "host": target.host, "kind": target.kind}
         if not up:
@@ -605,6 +636,7 @@ class Monitor:
                 self.set(f"node_{name}_signal", sig)
             if self.opts.get("ping_mesh_nodes", True) and not master and info["ip"]:
                 self.add_ping_target(f"mesh_{slugify(name)}", f"Satelita {name}", info["ip"], "mesh")
+        self._prune_missing_nodes({n["name"] for n in node_list})
         short, tree = topology_text({n["name"]: n for n in node_list})
         self.set("mesh_topology", short, {"drzewo": tree})
         known_ips = dict(self.analyzer.node_ips)
@@ -691,7 +723,7 @@ class Monitor:
     def publish_stats(self) -> None:
         sample = {"t": round(time.time()), "p": {}}
         for key, st in self.pinger.stats(30).items():
-            if st["samples"]:
+            if st["samples"] and f"ping_{key}_loss" in self.ents:
                 if st["avg"] is not None:
                     self.set(f"ping_{key}_rtt", st["avg"])
                 self.set(f"ping_{key}_loss", st["loss"])

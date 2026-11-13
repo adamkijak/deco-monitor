@@ -63,6 +63,7 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
     ip_names.update({i["ip"]: n for n, i in mon.nodes.items() if i.get("ip")})
 
     open_: dict = {}
+    ping_kinds: dict = {}  # nazwa -> rodzaj z samego zdarzenia (cel mógł już zniknąć z ping_meta)
 
     def close(key, end, lname, group, sev, label):
         start = open_.pop(key, None)
@@ -80,6 +81,8 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
         for opener, (closer, lname, sev, label) in PAIRS.items():
             if typ == closer:
                 close(opener, t, lname, "wan", sev, label)
+        if typ in ("ping_down", "ping_up") and data.get("kind"):
+            ping_kinds[data.get("name")] = data["kind"]
         if typ == "ping_down":
             open_.setdefault(("ping", data.get("name")), t)
         elif typ == "ping_up":
@@ -117,7 +120,8 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
         if isinstance(key, tuple) and key[0] == "ping":
             still_bad = any(m["name"] == key[1] and mon.pinger.targets[k].up is False
                             for k, m in mon.ping_meta.items() if k in mon.pinger.targets)
-            kind = next((m["kind"] for m in mon.ping_meta.values() if m["name"] == key[1]), "local")
+            kind = next((m["kind"] for m in mon.ping_meta.values() if m["name"] == key[1]),
+                        ping_kinds.get(key[1], "local"))
             close(key, now if still_bad else start + 2, _ping_lane(key[1], kind), kind, "problem",
                   "brak odpowiedzi na ping")
         elif key == "wan_link_down":
@@ -141,9 +145,15 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
         ln["points"] = [p for p in ln["points"] if p[0] >= since]
     for ln in lanes.values():
         ln["intervals"] = [[max(i[0], since), min(i[1], now)] + i[2:] for i in ln["intervals"]]
+    # satelity usunięte z sieci Deco (nie ma ich już na liście węzłów): bez pasów z ich historią
+    current = {f"Satelita {n}" for n, i in mon.nodes.items() if not i.get("master")}
+    hide = {ln["name"] for ln in lanes.values()
+            if mon.nodes and ln["group"] == "mesh" and ln["name"].startswith("Satelita ")
+            and ln["name"] not in current}
     # porty switcha i LTE: tylko gdy coś się działo; w trybie compact - wszystkie puste pasy znikają
     out = [ln for ln in lanes.values()
-           if (ln["group"] not in ("switch", "lte") or ln["intervals"])
+           if ln["name"] not in hide
+           and (ln["group"] not in ("switch", "lte") or ln["intervals"])
            and (not compact or ln["intervals"] or ln["points"] or ln["name"] in ("Internet (Deco)", "Kabel WAN"))]
     return {"from": since, "to": now, "lanes": out}
 

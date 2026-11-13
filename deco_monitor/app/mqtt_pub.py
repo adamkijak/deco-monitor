@@ -23,6 +23,13 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
+def is_stale_discovery_topic(topic: str) -> bool:
+    """homeassistant/<domena>/deco_monitor/<domena>.deco_monitor_x/config - zły temat z wersji <= 1.3.4."""
+    parts = topic.split("/")
+    return (len(parts) == 5 and parts[0] == DISCOVERY and parts[2] == BASE and parts[4] == "config"
+            and "." in parts[3])
+
+
 class Publisher:
     def __init__(self, host: str | None, port: int, username: str | None, password: str | None,
                  version: str, dry_run: bool = False):
@@ -31,6 +38,7 @@ class Publisher:
         self._entities: dict = {}  # uid -> (domain, config)
         self._retained: dict = {}  # topic -> payload
         self._lock = threading.Lock()
+        self._cleanup_timer = None
         self.device = {
             "identifiers": [BASE],
             "name": "Deco Monitor",
@@ -66,9 +74,23 @@ class Publisher:
             return
         log.info("Połączono z MQTT")
         client.subscribe(f"{DISCOVERY}/status")
+        # wersje <= 1.3.4 przy ponownej publikacji używały złego tematu (z "domena." w object_id);
+        # takie retained kopie odtwarzały w HA encje, które już usunięto - czyścimy je
+        client.subscribe(f"{DISCOVERY}/+/{BASE}/+/config")
         self._republish()
 
     def _on_message(self, client, userdata, msg):
+        if is_stale_discovery_topic(msg.topic) and msg.payload:
+            log.info("Usuwam starą kopię konfiguracji MQTT: %s", msg.topic)
+            self._raw(msg.topic, "", retain=True)
+            # gdyby HA utworzył encję właśnie z tej kopii, usunięcie kopii usunie encję - publikujemy
+            # więc wszystko jeszcze raz pod właściwymi tematami (raz, po zebraniu wszystkich kopii)
+            with self._lock:
+                if self._cleanup_timer is None:
+                    self._cleanup_timer = threading.Timer(10, self._republish)
+                    self._cleanup_timer.daemon = True
+                    self._cleanup_timer.start()
+            return
         if msg.topic == f"{DISCOVERY}/status" and msg.payload == b"online":
             log.info("Home Assistant wystartował - ponowna publikacja encji")
             self._republish()
@@ -77,8 +99,8 @@ class Publisher:
         with self._lock:
             ents = list(self._entities.items())
             retained = dict(self._retained)
-        for uid, (domain, cfg) in ents:
-            self._raw(f"{DISCOVERY}/{domain}/{BASE}/{uid}/config", json.dumps(cfg), retain=True)
+        for _key, (domain, cfg) in ents:
+            self._raw(f"{DISCOVERY}/{domain}/{BASE}/{cfg['unique_id']}/config", json.dumps(cfg), retain=True)
         self._raw(AVAIL, "online", retain=True)
         for topic, payload in retained.items():
             self._raw(topic, payload, retain=True)
@@ -116,6 +138,21 @@ class Publisher:
         if new:
             self._raw(f"{DISCOVERY}/{domain}/{BASE}/{uid}/config", json.dumps(cfg), retain=True)
         return key
+
+    def remove(self, key: str) -> None:
+        """Usuwa encję z HA (pusty retained config) i czyści jej retained state/attr."""
+        with self._lock:
+            item = self._entities.pop(key, None)
+            if item is None:
+                return
+            domain, cfg = item
+            base = cfg["state_topic"].rsplit("/", 1)[0]
+            topics = [f"{base}/state", f"{base}/attr"]
+            for t in topics:
+                self._retained.pop(t, None)
+        self._raw(f"{DISCOVERY}/{domain}/{BASE}/{cfg['unique_id']}/config", "", retain=True)
+        for t in topics:
+            self._raw(t, "", retain=True)
 
     def _topic(self, key: str, suffix: str) -> str:
         domain, cfg = self._entities[key]

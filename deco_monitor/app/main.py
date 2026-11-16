@@ -32,7 +32,7 @@ from incidents import IncidentTracker  # noqa: E402
 from migrate import remove_false_alarms  # noqa: E402
 from noise import NOISE_RE  # noqa: E402
 from mqtt_pub import Publisher, slugify, supervisor_mqtt  # noqa: E402
-from pinger import Pinger  # noqa: E402
+from pinger import Pinger, ping_once  # noqa: E402
 from presence import Presence  # noqa: E402
 from satlogs import SatelliteLogs  # noqa: E402
 from store import Store  # noqa: E402
@@ -40,7 +40,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.7"
+VERSION = "1.3.8"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -202,11 +202,13 @@ class Monitor:
                                                    if m["kind"] == "internet"}
         self.presence = Presence(opts.get("presence") or [],
                                  60 * float(opts.get("presence_away_minutes", 5)))
+        self._presence_saved_at = 0.0
         self.pinger = Pinger(float(opts.get("ping_interval", 2)), 2, self._ping_change)
 
         self.counters = load_json(os.path.join(self.data_dir, "counters.json"), {})
         self.persist = load_json(os.path.join(self.data_dir, "state.json"), {})
         self._persist_lock = threading.Lock()
+        self.presence.load(self.persist.get("presence"))
         if not self.persist.get("archive_deduped_1_2"):
             # wersje < 1.2.0 dopisywały nieaktualne zrzuty bufora drugi raz
             removed = self.store.dedupe_archive()
@@ -603,14 +605,29 @@ class Monitor:
         if not self.presence.names:
             return
         decoded = [{**c, "name": b64_name(c.get("name", ""))} for c in clients]
-        for n, (state, attrs) in self.presence.update(decoded, time.time()).items():
+        now = time.time()
+        changed = False
+        for n, (state, attrs) in self.presence.update(decoded, now, self._phone_answers).items():
             key = f"presence_{slugify(n)}"
             if self.values.get(key) != state:
-                log.info("Obecność %s: %s", n, state)
-            if "ostatnio_widziany" in attrs:
-                attrs["ostatnio_widziany"] = datetime.fromtimestamp(attrs["ostatnio_widziany"]).isoformat(
-                    timespec="seconds")
+                changed = True
+                log.info("Obecność %s: %s%s", n, state,
+                         " (poza listą Deco, odpowiada na ping)" if "odpowiada_na_ping" in attrs else "")
+            for a in ("ostatnio_widziany", "odpowiada_na_ping"):
+                if a in attrs:
+                    attrs[a] = datetime.fromtimestamp(attrs[a]).isoformat(timespec="seconds")
             self.set(key, state, attrs)
+        # czas ostatniego widzenia przetrwa restart dodatku (zapis co najwyżej co 2 min albo przy zmianie)
+        if changed or now - self._presence_saved_at > 120:
+            self._presence_saved_at = now
+            with self._persist_lock:
+                self.persist["presence"] = self.presence.export()
+                save_json(os.path.join(self.data_dir, "state.json"), self.persist)
+
+    @staticmethod
+    def _phone_answers(ip: str) -> bool:
+        # telefon w uśpieniu odpowiada nawet po ~2 s (OnePlus-15, 16.11)
+        return any(ping_once(ip, 3) is not None for _ in range(3))
 
     def poll_api(self) -> None:
         d = self.deco

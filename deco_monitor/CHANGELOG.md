@@ -1,5 +1,14 @@
 # Zmiany
 
+## 1.3.8
+
+- **Obecność: ping przed „poza domem”.** Gdy telefonu nie ma na liście klientów Deco dłużej niż
+  `presence_away_minutes`, dodatek pinguje jego ostatni IP (3 próby). Odpowiedź przedłuża obecność o kolejne
+  `presence_away_minutes`, a w atrybutach trackera pojawia się `odpowiada_na_ping`. Ping tylko do 30 min od ostatniego
+  widzenia na liście, bo potem Deco mogło przydzielić ten adres innemu urządzeniu.
+- **Obecność przetrwa restart dodatku.** Czas ostatniego widzenia telefonu jest zapisywany na dysku, więc telefon
+  chwilowo rozłączony z WiFi w chwili restartu nie dostaje od razu `not_home`.
+
 ## 1.3.7
 
 - **Obecność domowników po WiFi.** Opcja `presence` z nazwami klientów z listy Deco (np. `OnePlus-13`) tworzy

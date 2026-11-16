@@ -94,7 +94,7 @@ potem Uruchom. Jeśli używasz starego dodatku *Deco Syslog Bridge* – odinstal
 | `satellite_log_retention_days` | Ile dni trzymać logi satelit (domyślnie 7). X50 zapisuje ~40–70 MB logu na dobę. |
 | `log_retention_days` | Ile dni trzymać archiwum logów i historii pomiarów. |
 | `presence` | Nazwy klientów z listy Deco (np. `OnePlus-13`), dla których tworzyć tracker obecności. Bez rozróżniania wielkości liter. |
-| `presence_away_minutes` | Po ilu minutach nieobecności na liście klientów tracker przechodzi w `not_home` (domyślnie 5). |
+| `presence_away_minutes` | Po ilu minutach nieobecności na liście klientów tracker przechodzi w `not_home` (domyślnie 5). Wcześniej dodatek pinguje ostatni IP telefonu i przy odpowiedzi czeka kolejne tyle samo (najwyżej 30 min od ostatniego widzenia na liście). |
 | `auto_dashboard` | Sam twórz i aktualizuj pulpit „Sieć Deco” w HA. |
 | `mqtt_*` | Tylko gdy broker MQTT nie jest dodatkiem HA. |
 

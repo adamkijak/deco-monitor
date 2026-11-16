@@ -43,6 +43,43 @@ class PresenceTest(unittest.TestCase):
         self.assertEqual(back[0], "home")
         self.assertNotIn("ostatnio_widziany", back[1])  # na liście: atrybuty stałe między odczytami
 
+    def test_ping_keeps_home(self):
+        pings = []
+        def ping(ip):
+            pings.append(ip)
+            return True
+        p = Presence(["OnePlus-13"], away_after=300, ping_window=1800)
+        p.update([PHONE], 1000)
+        self.assertEqual(p.update([OTHER], 1200, ping)["OnePlus-13"][0], "home")
+        self.assertEqual(pings, [])  # w oknie 5 min bez pingu
+        out = p.update([OTHER], 1300, ping)["OnePlus-13"]
+        self.assertEqual(out[0], "home")
+        self.assertEqual(pings, ["192.168.68.87"])
+        self.assertEqual(out[1]["odpowiada_na_ping"], 1300)
+        self.assertEqual(p.update([OTHER], 1500, ping)["OnePlus-13"][0], "home")
+        self.assertEqual(len(pings), 1)  # odpowiedź przedłuża o 5 min, bez kolejnego pingu
+        self.assertEqual(p.update([OTHER], 2800, ping)["OnePlus-13"][0], "not_home")  # po 30 min nie pingujemy
+        self.assertEqual(p.update([PHONE], 2830, ping)["OnePlus-13"][1].get("odpowiada_na_ping"), None)
+
+    def test_ping_no_answer(self):
+        p = Presence(["OnePlus-13"], away_after=300)
+        p.update([PHONE], 1000)
+        self.assertEqual(p.update([OTHER], 1300, lambda ip: False)["OnePlus-13"][0], "not_home")
+
+    def test_survives_restart(self):
+        p = Presence(["OnePlus-13"], away_after=300)
+        p.update([PHONE], 1000)
+        q = Presence(["OnePlus-13", "OnePlus-15"], away_after=300)
+        q.load(p.export())
+        out = q.update([OTHER], 1100)
+        self.assertEqual(out["OnePlus-13"][0], "home")
+        self.assertEqual(out["OnePlus-13"][1]["ip"], "192.168.68.87")
+        self.assertEqual(out["OnePlus-15"][0], "not_home")
+        r = Presence(["Inny"])
+        r.load(p.export())
+        self.assertEqual(r.last_seen, {})
+        r.load(None)
+
     def test_offline_client_ignored(self):
         p = Presence(["OnePlus-13"])
         self.assertEqual(p.update([{**PHONE, "online": False}], 1000)["OnePlus-13"][0], "not_home")

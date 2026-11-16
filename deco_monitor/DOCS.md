@@ -40,11 +40,14 @@ ruchliwym 2,4 GHz, ~20 minut w X50), dlatego nie ustawiaj odstępu dłuższego n
 
 Do tego zdarzenia z innych źródeł: brak pingu i powrót (z czasem zaniku), utrata linku na porcie switcha,
 restart switcha (wyzerowane liczniki), węzeł offline, zmiana połączenia węzła.
+Gdy główne Deco zgłasza węzeł jako offline, a ping do niego działa, zdarzenie ma wagę „ostrzeżenie”
+(„Deco główne straciło z nim kontakt (ruch działa)”) i nie otwiera incydentu.
 
 ### Incydenty
 
 Każdy problem otwiera **incydent**, a kolejne sygnały do niego dołączają. Incydent zamyka się, gdy wszystkie
-pingi odpowiadają i przez ~35 s nie przyszło nic nowego. Wtedy powstaje jedno podsumowanie, np.:
+pingi odpowiadają i przez ~35 s nie przyszło nic nowego (incydent z węzłem offline trwa co najmniej do
+jego powrotu). Wtedy powstaje jedno podsumowanie, np.:
 
 > 17:09:34 Zanik kabla WAN, 31 s; restart DHCP LAN ×1; na radiu: bedroom; brak pingu: Google DNS, Cloudflare
 

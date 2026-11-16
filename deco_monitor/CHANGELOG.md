@@ -1,5 +1,17 @@
 # Zmiany
 
+## 1.3.6
+
+- **Węzeł „offline”, który działa.** Gdy główne Deco zgłasza węzeł jako offline, a ping do niego odpowiada,
+  dodatek zapisuje ostrzeżenie „Deco główne straciło z nim kontakt (ruch działa)” zamiast incydentu
+  „Węzeł Deco offline”. Tak było 16.11 z kuchnią: główne Deco przez 3 min nie mogło się połączyć z nią po SSH,
+  a satelita cały czas działała. Na osi czasu taki okres jest pomarańczowy, nie czerwony.
+- **Poprawka: fałszywe zmiany połączenia i rodzica.** Węzeł offline nie ma na liście Deco typu połączenia
+  ani rodzica, więc dodatek zgłaszał „kabel → radio” i „podłączony do Poddasze”. Póki węzeł jest offline,
+  jego encje zachowują ostatni stan online, a zmiany są liczone dopiero po powrocie, względem tego stanu.
+- **Poprawka: incydent „Węzeł Deco offline, 0 s”.** Incydent zamykał się po ok. 35 s spokoju pingów, zanim
+  węzeł wrócił. Teraz trwa do powrotu węzła (najwyżej 6 h), więc czas incydentu to czas niedostępności.
+
 ## 1.3.5
 
 - **Węzeł usunięty z sieci Deco znika sam.** Gdy węzła nie ma na liście Deco przez 10 odczytów z rzędu (ok. 5 min),

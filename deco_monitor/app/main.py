@@ -39,7 +39,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.5"
+VERSION = "1.3.6"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -379,6 +379,7 @@ class Monitor:
         log.warning("Węzeł %s zniknął z sieci Deco - usuwam jego encje, ping i logi satelity", name)
         self.nodes.pop(name, None)
         self._node_missing.pop(name, None)
+        self.incidents.release(f"node:{name}")
         pkey = f"mesh_{slugify(name)}"
         self.pinger.remove_target(pkey)
         self.ping_meta.pop(pkey, None)
@@ -390,6 +391,51 @@ class Monitor:
             self.values.pop(k, None)
         if self.satlogs:
             self.satlogs.remove_node(name)
+
+    def _mesh_ping_ok(self, name: str) -> bool:
+        t = self.pinger.targets.get(f"mesh_{slugify(name)}")
+        return t is not None and t.up is True
+
+    def _compare_node(self, name: str, prev: dict | None, info: dict, now: float) -> None:
+        """Zdarzenia ze zmian węzła między odczytami device_list.
+
+        Węzeł offline nie ma w device_list connection_type ani parent_device_id, więc jego "radio"
+        i rodzic (nieznany id = główne Deco) są fałszywe: póki jest offline, trzymamy ostatni stan
+        online i porównujemy dopiero z nim, po powrocie."""
+        online = info["online"]
+        if prev is None:
+            if not online and not info["master"]:  # offline od startu dodatku: stanu nie znamy
+                info.update(conn="nieznane", parent=None, wired=False, bh_speed=None)
+            return
+        if not online:
+            for k in ("conn", "parent", "wired", "bh_speed"):
+                info[k] = prev.get(k)
+        if prev["online"] and not online:
+            if self._mesh_ping_ok(name):
+                # 16.11: SSH głównego Deco do kuchni "Connection refused" przez 3 min, a satelita działała
+                self.emit("node_offline", f"Węzeł {name}: Deco główne straciło z nim kontakt (ruch działa)",
+                          "warning", now, {"node": name, "ping_ok": True})
+            else:
+                self.emit("node_offline", f"Węzeł {name}: offline", "problem", now, {"node": name})
+                self.incidents.hold(f"node:{name}")
+        elif not prev["online"] and online:
+            self.emit("node_online", f"Węzeł {name}: znów online", "info", now, {"node": name})
+            self.incidents.release(f"node:{name}")
+        if not online:
+            return
+        if prev["conn"] != info["conn"] and prev["conn"] != "nieznane":
+            self.emit("node_backhaul_change", f"Węzeł {name}: połączenie {prev['conn']} → {info['conn']}",
+                      "warning", now, {"node": name, "from": prev["conn"], "to": info["conn"]})
+        old_p, new_p = prev.get("parent"), info["parent"]
+        if old_p and new_p and old_p != new_p:
+            self.emit("node_parent_change", f"Węzeł {name}: podłączony do {new_p} (było: {old_p})",
+                      "warning", now, {"node": name, "from": old_p, "to": new_p})
+        old_sp, new_sp = prev.get("bh_speed"), info["bh_speed"]
+        if old_sp and new_sp and old_sp != new_sp:
+            self.emit("node_backhaul_speed",
+                      f"Węzeł {name}: prędkość kabla {old_sp} → {new_sp} Mbit/s",
+                      "warning" if new_sp < old_sp else "info", now,
+                      {"node": name, "from": old_sp, "to": new_sp})
 
     def _register_bh_speed(self, name: str) -> None:
         self.ent(f"node_{name}_bh_speed", "sensor", f"{name} prędkość kabla", unit_of_measurement="Mbit/s",
@@ -599,39 +645,20 @@ class Monitor:
             }
             node_list.append(info)
             self._register_node(name, master, sig is not None)
-            prev = self.nodes.get(name)
-            now = time.time()
-            if prev:
-                if prev["online"] != online:
-                    self.emit("node_offline" if not online else "node_online",
-                              f"Węzeł {name}: {'offline' if not online else 'znów online'}",
-                              "problem" if not online else "info", now, {"node": name})
-                if prev["conn"] != conn_text:
-                    self.emit("node_backhaul_change", f"Węzeł {name}: połączenie {prev['conn']} → {conn_text}",
-                              "warning", now, {"node": name, "from": prev["conn"], "to": conn_text})
-                old_p, new_p = prev.get("parent"), info["parent"]
-                if old_p and new_p and old_p != new_p:
-                    self.emit("node_parent_change", f"Węzeł {name}: podłączony do {new_p} (było: {old_p})",
-                              "warning", now, {"node": name, "from": old_p, "to": new_p})
-                old_sp, new_sp = prev.get("bh_speed"), info["bh_speed"]
-                if old_sp and new_sp and old_sp != new_sp:
-                    self.emit("node_backhaul_speed",
-                              f"Węzeł {name}: prędkość kabla {old_sp} → {new_sp} Mbit/s",
-                              "warning" if new_sp < old_sp else "info", now,
-                              {"node": name, "from": old_sp, "to": new_sp})
+            self._compare_node(name, self.nodes.get(name), info, time.time())
             self.nodes[name] = info
             if info["bh_speed"]:
                 self._register_bh_speed(name)
                 self.set(f"node_{name}_bh_speed", info["bh_speed"])
             elif f"node_{name}_bh_speed" in self.ents:
                 self.set(f"node_{name}_bh_speed", 0)  # bez kabla (na radiu) -> 0 na wykresie
-            self.set(f"node_{name}_conn", conn_text,
+            self.set(f"node_{name}_conn", info["conn"],
                      {k: v for k, v in info.items() if k not in ("macs",)})
             self.set(f"node_{name}_online", online)
             if not master:
                 self.set(f"node_{name}_parent", info["parent"] or "nieznany")
             if not master and self.log_state_at.get(f"radio_backhaul:{name}", 0) < recent:
-                self.set(f"node_{name}_radio", not wired)
+                self.set(f"node_{name}_radio", not info["wired"])
             if sig is not None:
                 self.set(f"node_{name}_signal", sig)
             if self.opts.get("ping_mesh_nodes", True) and not master and info["ip"]:

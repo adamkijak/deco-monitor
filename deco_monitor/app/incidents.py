@@ -3,6 +3,8 @@
 Incydent otwiera każdy sygnał o wadze "problem". Zamyka się, gdy wszystkie
 pingi są OK i przez `quiet_s` nie przyszedł żaden nowy problem (logi Deco
 docierają z opóźnieniem, więc quiet_s musi być dłuższe niż to opóźnienie).
+Sygnał może też "trzymać" incydent otwarty (`hold`) do swojego końca (`release`), np. węzeł Deco
+offline do powrotu, nawet jeśli pingi już działają.
 """
 
 from __future__ import annotations
@@ -16,9 +18,13 @@ def _fmt(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime("%H:%M:%S")
 
 
+MAX_HOLD_S = 6 * 3600  # zabezpieczenie: wstrzymanie, którego nikt nie zwolnił, wygasa
+
+
 class IncidentTracker:
     def __init__(self, quiet_s: float, on_close):
         self.quiet_s = quiet_s
+        self._holds: dict = {}  # klucz -> od kiedy (time.time())
         self.on_close = on_close
         self._lock = threading.Lock()
         self._open: dict | None = None
@@ -42,6 +48,16 @@ class IncidentTracker:
                 inc["last_problem"] = max(inc["last_problem"], ts)
             inc["start"] = min(inc["start"], ts)
 
+    def hold(self, key: str) -> None:
+        """Nie zamykaj otwartego incydentu przed release(key)."""
+        with self._lock:
+            if self._open is not None:
+                self._holds.setdefault(key, time.time())
+
+    def release(self, key: str) -> None:
+        with self._lock:
+            self._holds.pop(key, None)
+
     def is_open(self) -> bool:
         return self._open is not None
 
@@ -50,7 +66,11 @@ class IncidentTracker:
             inc = self._open
             if inc is None or not all_pings_up:
                 return
-            if time.time() - inc["last_signal"] < self.quiet_s:
+            now = time.time()
+            for k, since in list(self._holds.items()):
+                if now - since > MAX_HOLD_S:
+                    del self._holds[k]
+            if self._holds or now - inc["last_signal"] < self.quiet_s:
                 return
             self._open = None
         self.on_close(summarize(inc, self.internet_targets()))
@@ -135,7 +155,7 @@ def summarize(inc: dict, internet_targets: set | None = None) -> dict:
         cause = "Satelita straciła kabel"
     elif "clients_kicked" in tset or "wifi_mass_disconnect" in tset:
         cause = "Masowe rozłączenie klientów WiFi"
-    elif "node_offline" in tset:
+    elif any(i["type"] == "node_offline" and i["severity"] == "problem" for i in items):
         cause = "Węzeł Deco offline"
     elif pings("internet"):  # tylko część celów w internecie - reszta odpowiadała
         cause = ("Brak pingu do " + ", ".join(sorted({i["data"].get("name", "?") for i in pings("internet")}))

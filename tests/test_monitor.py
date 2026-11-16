@@ -374,7 +374,8 @@ class RemovedNodeTest(unittest.TestCase):
                                      "ping_mesh_hallway": "binary_sensor.deco_monitor_ping_satelita_hallway",
                                      "ping_mesh_hallway_rtt": "x_rtt", "ping_mesh_hallway_loss": "x_loss",
                                      "node_bedroom_online": "binary_sensor.deco_monitor_bedroom_online"},
-                               values={}, pub=mock.Mock(), pinger=mock.Mock(), satlogs=mock.Mock())
+                               values={}, pub=mock.Mock(), pinger=mock.Mock(), satlogs=mock.Mock(),
+                               incidents=mock.Mock())
         fake._forget_node = lambda name: main.Monitor._forget_node(fake, name)
         for _ in range(main.NODE_GONE_POLLS - 1):
             main.Monitor._prune_missing_nodes(fake, {"Poddasze", "bedroom"})
@@ -385,6 +386,7 @@ class RemovedNodeTest(unittest.TestCase):
         self.assertEqual(fake.pub.remove.call_count, 5)
         fake.pinger.remove_target.assert_called_once_with("mesh_hallway")
         fake.satlogs.remove_node.assert_called_once_with("hallway")
+        fake.incidents.release.assert_called_once_with("node:hallway")
         self.assertNotIn("mesh_hallway", fake.ping_meta)
 
     def test_node_back_resets_counter(self):
@@ -431,6 +433,139 @@ class RemovedNodeTest(unittest.TestCase):
         self.assertIn("homeassistant/binary_sensor/deco_monitor/deco_monitor_bedroom_online/config", sent)
         self.assertFalse([t for t in sent if "/binary_sensor.deco_monitor" in t])
 
+
+
+class NodeOfflineTest(unittest.TestCase):
+    """1.3.6: węzeł offline w device_list (16.11 kuchnia: ping działał, główne Deco nie miało SSH)."""
+
+    @staticmethod
+    def _fake(ping_up):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        import main
+        fake = SimpleNamespace(emit=mock.Mock(), incidents=mock.Mock(),
+                               pinger=SimpleNamespace(targets={"mesh_kitchen": SimpleNamespace(up=ping_up)}))
+        fake._mesh_ping_ok = lambda name: main.Monitor._mesh_ping_ok(fake, name)
+        return fake, main
+
+    ONLINE = {"master": False, "online": True, "conn": "kabel", "parent": "Poddasze", "wired": True,
+              "bh_speed": 100}
+    OFFLINE = {"master": False, "online": False, "conn": "radio", "parent": "Poddasze", "wired": False,
+               "bh_speed": None}
+
+    def test_offline_with_ping_ok_is_warning(self):
+        fake, main = self._fake(True)
+        main.Monitor._compare_node(fake, "kitchen", dict(self.ONLINE, parent="living_room"),
+                                   dict(self.OFFLINE), 1000.0)
+        (etype, msg, sev, *_), _ = fake.emit.call_args
+        self.assertEqual((etype, sev), ("node_offline", "warning"))
+        self.assertIn("straciło z nim kontakt (ruch działa)", msg)
+        fake.incidents.hold.assert_not_called()
+
+    def test_offline_without_ping_is_problem_and_holds_incident(self):
+        fake, main = self._fake(False)
+        main.Monitor._compare_node(fake, "kitchen", dict(self.ONLINE), dict(self.OFFLINE), 1000.0)
+        (etype, _msg, sev, *_), _ = fake.emit.call_args
+        self.assertEqual((etype, sev), ("node_offline", "problem"))
+        fake.incidents.hold.assert_called_once_with("node:kitchen")
+
+    def test_no_false_conn_or_parent_change_while_offline(self):
+        fake, main = self._fake(True)
+        prev = dict(self.ONLINE, parent="living_room")
+        off = dict(self.OFFLINE)
+        main.Monitor._compare_node(fake, "kitchen", prev, off, 1000.0)
+        # ostatni stan online zostaje
+        self.assertEqual((off["conn"], off["parent"], off["wired"], off["bh_speed"]),
+                         ("kabel", "living_room", True, 100))
+        off2 = dict(self.OFFLINE)
+        main.Monitor._compare_node(fake, "kitchen", off, off2, 1030.0)
+        back = dict(self.ONLINE, parent="living_room")
+        main.Monitor._compare_node(fake, "kitchen", off2, back, 1060.0)
+        types = [c.args[0] for c in fake.emit.call_args_list]
+        self.assertEqual(types, ["node_offline", "node_online"])
+        fake.incidents.release.assert_called_once_with("node:kitchen")
+
+    def test_change_after_return_compared_with_last_online(self):
+        fake, main = self._fake(True)
+        off = dict(self.OFFLINE)
+        main.Monitor._compare_node(fake, "kitchen", dict(self.ONLINE), off, 1000.0)
+        back = dict(self.ONLINE, conn="radio 5 GHz", wired=False, bh_speed=None)
+        main.Monitor._compare_node(fake, "kitchen", off, back, 1030.0)
+        changes = [c.args for c in fake.emit.call_args_list if c.args[0] == "node_backhaul_change"]
+        self.assertEqual(len(changes), 1)
+        self.assertIn("kabel → radio 5 GHz", changes[0][1])
+
+    def test_offline_at_startup_unknown(self):
+        fake, main = self._fake(None)
+        off = dict(self.OFFLINE)
+        main.Monitor._compare_node(fake, "kitchen", None, off, 1000.0)
+        self.assertEqual((off["conn"], off["parent"]), ("nieznane", None))
+        fake.emit.assert_not_called()
+
+    def test_warning_offline_is_not_incident_cause(self):
+        t0 = datetime(2026, 11, 16, 0, 6, 15).timestamp()
+        inc = summarize({"items": [
+            {"ts": t0, "type": "ping_down", "text": "ping", "severity": "problem",
+             "data": {"name": "NAS", "kind": "local"}},
+            {"ts": t0 + 1, "type": "node_offline", "text": "kontakt", "severity": "warning",
+             "data": {"node": "kitchen", "ping_ok": True}},
+        ]})
+        self.assertNotEqual(inc["cause"], "Węzeł Deco offline")
+
+    def test_incident_held_until_node_online(self):
+        from unittest import mock
+
+        from incidents import IncidentTracker
+        closed = []
+        tr = IncidentTracker(30, closed.append)
+        now = [10_000.0]
+        with mock.patch("incidents.time.time", lambda: now[0]):
+            tr.signal(now[0], "node_offline", "Węzeł kitchen: offline", "problem", {"node": "kitchen"})
+            tr.hold("node:kitchen")
+            now[0] += 120
+            tr.tick(True)
+            self.assertEqual(closed, [])
+            tr.signal(now[0] + 30, "node_online", "Węzeł kitchen: znów online", "info", {"node": "kitchen"})
+            tr.release("node:kitchen")
+            now[0] += 31
+            tr.tick(True)
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(closed[0]["duration_s"], 150)
+        self.assertEqual(closed[0]["cause"], "Węzeł Deco offline")
+
+    def test_stale_hold_expires(self):
+        from unittest import mock
+
+        import incidents
+        closed = []
+        tr = incidents.IncidentTracker(30, closed.append)
+        now = [10_000.0]
+        with mock.patch("incidents.time.time", lambda: now[0]):
+            tr.signal(now[0], "node_offline", "x", "problem", {"node": "kitchen"})
+            tr.hold("node:kitchen")
+            now[0] += incidents.MAX_HOLD_S + 1
+            tr.tick(True)
+        self.assertEqual(len(closed), 1)
+
+    def test_timeline_lost_contact_is_warning(self):
+        from types import SimpleNamespace
+
+        import viz
+        def ev(ago, typ, sev, data):
+            import time as _t
+            return {"time": datetime.fromtimestamp(_t.time() - ago).isoformat(timespec="seconds"),
+                    "type": typ, "severity": sev, "data": data}
+        evs = [ev(400, "node_offline", "warning", {"node": "kitchen", "ping_ok": True}),
+               ev(250, "node_online", "info", {"node": "kitchen"}),
+               ev(200, "node_offline", "problem", {"node": "kitchen"}),
+               ev(100, "node_online", "info", {"node": "kitchen"})]
+        store = SimpleNamespace(events_since=lambda ts: evs, incidents_since=lambda ts: [])
+        mon = SimpleNamespace(ping_meta={}, pinger=SimpleNamespace(targets={}), values={},
+                              nodes={"kitchen": {"master": False, "ip": "192.168.71.2", "wired": True}},
+                              analyzer=SimpleNamespace(node_ips={}))
+        lane = next(ln for ln in viz.timeline(store, mon, 1)["lanes"] if ln["name"] == "Satelita kitchen")
+        self.assertEqual([i[3] for i in lane["intervals"]], ["warning", "problem"])
 
 class MiscTest(unittest.TestCase):
     def test_slugify_like_home_assistant(self):

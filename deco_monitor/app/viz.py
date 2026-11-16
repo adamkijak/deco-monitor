@@ -63,6 +63,7 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
     ip_names.update({i["ip"]: n for n, i in mon.nodes.items() if i.get("ip")})
 
     open_: dict = {}
+    node_lost: dict = {}  # węzeł -> offline tylko dla głównego Deco (ping działał)
     ping_kinds: dict = {}  # nazwa -> rodzaj z samego zdarzenia (cel mógł już zniknąć z ping_meta)
 
     def close(key, end, lname, group, sev, label):
@@ -100,9 +101,14 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
             lane(f"Satelita {node}", "mesh")["points"].append([t, "niedostępna dla głównego Deco",
                                                                             "warning"])
         elif typ == "node_offline":
+            if ("node", data.get("node")) not in open_:
+                node_lost[data.get("node")] = bool(data.get("ping_ok"))
             open_.setdefault(("node", data.get("node")), t)
         elif typ == "node_online":
-            close(("node", data.get("node")), t, f"Satelita {data.get('node')}", "mesh", "problem", "offline")
+            lost = node_lost.pop(data.get("node"), False)
+            close(("node", data.get("node")), t, f"Satelita {data.get('node')}", "mesh",
+                  "warning" if lost else "problem",
+                  "brak kontaktu z głównym Deco (ping działał)" if lost else "offline")
         elif typ == "node_parent_change":
             lane(f"Satelita {data.get('node')}", "mesh")["points"].append(
                 [t, f"podłączona do {data.get('to')} (było: {data.get('from')})", "warning"])

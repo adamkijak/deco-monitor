@@ -130,6 +130,9 @@ class Publisher:
             cfg["json_attributes_topic"] = f"{topic}/attr"
         if domain == "binary_sensor":
             cfg.update({"payload_on": "ON", "payload_off": "OFF"})
+        if extra.pop("no_availability", False):
+            # np. trackery obecności: restart dodatku nie ma robić z osoby w HA "unknown"
+            del cfg["availability_topic"]
         cfg.update({k: v for k, v in extra.items() if v is not None})
         key = f"{domain}.{uid}"
         with self._lock:

@@ -40,7 +40,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.8"
+VERSION = "1.3.9"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -314,7 +314,7 @@ class Monitor:
         for n in self.presence.names:
             self.ent(f"presence_{slugify(n)}", "device_tracker", f"Obecność {n}", attrs=True,
                      source_type="router", payload_home="home", payload_not_home="not_home",
-                     icon="mdi:cellphone")
+                     icon="mdi:cellphone", no_availability=True)
 
     def _publish_history(self) -> None:
         """Ostatni incydent i ostatnie zdarzenie z archiwum (np. po starcie albo po migracji)."""

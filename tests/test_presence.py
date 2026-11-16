@@ -88,6 +88,15 @@ class PresenceTest(unittest.TestCase):
         self.assertEqual(Presence(None).update([PHONE], 1), {})
         self.assertEqual(Presence(["", "  "]).names, [])
 
+    def test_tracker_without_availability(self):
+        from mqtt_pub import Publisher
+        pub = Publisher(None, 1883, None, None, "test")
+        key = pub.entity("device_tracker", "Obecność X", source_type="router", no_availability=True)
+        self.assertNotIn("availability_topic", pub._entities[key][1])
+        self.assertNotIn("no_availability", pub._entities[key][1])
+        key = pub.entity("sensor", "Coś")
+        self.assertIn("availability_topic", pub._entities[key][1])
+
     def test_entity_slug(self):
         self.assertEqual(slugify("Obecność OnePlus-13"), "obecnosc_oneplus_13")
 

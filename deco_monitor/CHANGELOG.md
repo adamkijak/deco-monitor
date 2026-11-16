@@ -1,5 +1,11 @@
 # Zmiany
 
+## 1.3.9
+
+- **Obecność bez przerw przy restarcie dodatku.** Trackery obecności nie zależą już od dostępności dodatku
+  (`deco_monitor/status`), więc restart albo aktualizacja nie zmienia ich na `unavailable`, a osoby z jednym
+  trackerem nie dostają w historii `unknown`. Gdyby dodatek przestał działać, trackery zostają w ostatnim stanie.
+
 ## 1.3.8
 
 - **Obecność: ping przed „poza domem”.** Gdy telefonu nie ma na liście klientów Deco dłużej niż

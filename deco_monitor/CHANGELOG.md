@@ -1,5 +1,13 @@
 # Zmiany
 
+## 1.3.7
+
+- **Obecność domowników po WiFi.** Opcja `presence` z nazwami klientów z listy Deco (np. `OnePlus-13`) tworzy
+  trackery `device_tracker.deco_monitor_obecnosc_<nazwa>`, które można dodać do osób w HA. Telefon jest w domu,
+  dopóki jest na liście klientów Deco (odczyt co `api_interval`, domyślnie 30 s). `not_home` dopiero po
+  `presence_away_minutes` (domyślnie 5) nieobecności, bo Android w uśpieniu potrafi na chwilę rozłączyć się z WiFi.
+  Dopasowanie po nazwie, nie po MAC, więc losowy MAC Androida nie przeszkadza.
+
 ## 1.3.6
 
 - **Węzeł „offline”, który działa.** Gdy główne Deco zgłasza węzeł jako offline, a ping do niego odpowiada,

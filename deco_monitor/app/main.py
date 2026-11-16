@@ -33,13 +33,14 @@ from migrate import remove_false_alarms  # noqa: E402
 from noise import NOISE_RE  # noqa: E402
 from mqtt_pub import Publisher, slugify, supervisor_mqtt  # noqa: E402
 from pinger import Pinger  # noqa: E402
+from presence import Presence  # noqa: E402
 from satlogs import SatelliteLogs  # noqa: E402
 from store import Store  # noqa: E402
 from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.6"
+VERSION = "1.3.7"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -199,6 +200,8 @@ class Monitor:
         self.incidents = IncidentTracker(self.lag + 20, self._incident_closed)
         self.incidents.internet_targets = lambda: {m["name"] for m in self.ping_meta.values()
                                                    if m["kind"] == "internet"}
+        self.presence = Presence(opts.get("presence") or [],
+                                 60 * float(opts.get("presence_away_minutes", 5)))
         self.pinger = Pinger(float(opts.get("ping_interval", 2)), 2, self._ping_change)
 
         self.counters = load_json(os.path.join(self.data_dir, "counters.json"), {})
@@ -306,6 +309,10 @@ class Monitor:
         if self.switch:
             for n in range(1, 9):
                 self._register_port(n)
+        for n in self.presence.names:
+            self.ent(f"presence_{slugify(n)}", "device_tracker", f"Obecność {n}", attrs=True,
+                     source_type="router", payload_home="home", payload_not_home="not_home",
+                     icon="mdi:cellphone")
 
     def _publish_history(self) -> None:
         """Ostatni incydent i ostatnie zdarzenie z archiwum (np. po starcie albo po migracji)."""
@@ -592,6 +599,19 @@ class Monitor:
         self.recent_lines.extend(new[-40:])
         self.set("log_line", new[-1][:250], {"linie": list(self.recent_lines), "nowe": len(new)})
 
+    def _update_presence(self, clients: list) -> None:
+        if not self.presence.names:
+            return
+        decoded = [{**c, "name": b64_name(c.get("name", ""))} for c in clients]
+        for n, (state, attrs) in self.presence.update(decoded, time.time()).items():
+            key = f"presence_{slugify(n)}"
+            if self.values.get(key) != state:
+                log.info("Obecność %s: %s", n, state)
+            if "ostatnio_widziany" in attrs:
+                attrs["ostatnio_widziany"] = datetime.fromtimestamp(attrs["ostatnio_widziany"]).isoformat(
+                    timespec="seconds")
+            self.set(key, state, attrs)
+
     def poll_api(self) -> None:
         d = self.deco
         perf = d.read("admin/network", "performance")
@@ -615,6 +635,7 @@ class Monitor:
         wifi = sum(1 for c in clients if c.get("wire_type") == "wireless")
         self.set("clients_wifi", wifi)
         self.set("clients_wired", len(clients) - wifi)
+        self._update_presence(clients)
 
         def name_of(dev):
             return b64_name(dev.get("custom_nickname", "")) or dev.get("nickname") or dev.get("device_model", "?")

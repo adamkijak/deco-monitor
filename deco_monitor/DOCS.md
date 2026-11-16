@@ -93,6 +93,8 @@ potem Uruchom. Jeśli używasz starego dodatku *Deco Syslog Bridge* – odinstal
 | `satellite_syslog_interval` | Co ile sekund pobierać log satelity (60–1800, domyślnie 300). |
 | `satellite_log_retention_days` | Ile dni trzymać logi satelit (domyślnie 7). X50 zapisuje ~40–70 MB logu na dobę. |
 | `log_retention_days` | Ile dni trzymać archiwum logów i historii pomiarów. |
+| `presence` | Nazwy klientów z listy Deco (np. `OnePlus-13`), dla których tworzyć tracker obecności. Bez rozróżniania wielkości liter. |
+| `presence_away_minutes` | Po ilu minutach nieobecności na liście klientów tracker przechodzi w `not_home` (domyślnie 5). |
 | `auto_dashboard` | Sam twórz i aktualizuj pulpit „Sieć Deco” w HA. |
 | `mqtt_*` | Tylko gdy broker MQTT nie jest dodatkiem HA. |
 
@@ -109,6 +111,9 @@ Wszystkie należą do urządzenia **Deco Monitor** i mają prefiks `deco_monitor
 - liczniki (rosnące, do statystyk dziennych): zaniki kabla WAN, zaniki internetu, wyrzucenia klientów, restarty
   DHCP, utraty kabla satelit, rozłączenia WiFi, incydenty, zaniki ping, utraty linku na switchu…
 - `sensor.deco_monitor_cpu_deco`, `…_ram_deco`, `…_adres_ip_wan`, `…_klienci_wifi`, `…_klienci_przewodowi`
+- dla każdej nazwy z `presence`: `device_tracker.deco_monitor_obecnosc_<nazwa>` (`home` / `not_home`,
+  `source_type: router`), w atrybutach IP, MAC, pasmo, a gdy telefonu nie ma na liście, czas ostatniego widzenia. Tracker dopasowuje telefon po nazwie,
+  nie po MAC, bo Android zmienia losowy MAC po „zapomnij sieć”. Dodaj go do osoby w HA (Ustawienia → Osoby).
 
 **Recorder:** `sensor.deco_monitor_log_ostatnie_linie` ma w atrybutach 40 ostatnich linii logu i zmienia się co
 10 s. Żeby nie puchła baza, wyklucz go w `configuration.yaml`:

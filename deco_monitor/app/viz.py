@@ -25,6 +25,8 @@ POINTS = {
     "wifi_client_flapping": "urządzenie WiFi rozłącza się co chwilę",
     "router_boot": "restart Deco",
     "switch_counters_reset": "restart switcha",
+    "moca_phy_low": "MoCA: spadek PHY",
+    "moca_eth_errors": "MoCA: błędne ramki na porcie Ethernet",
 }
 
 
@@ -117,6 +119,10 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
         elif typ == "switch_port_up":
             n = data.get("port")
             close(("port", n), t, f"Switch port {n} ({data.get('label', '')})", "switch", "problem", "brak linku")
+        elif typ == "moca_link_down":
+            open_.setdefault(("moca",), t)
+        elif typ == "moca_link_up":
+            close(("moca",), t, "Łącze MoCA", "switch", "problem", "zerwane")
         elif typ in POINTS:
             lane("Zdarzenia Deco", "dev")["points"].append([t, POINTS[typ], e.get("severity", "warning")])
 
@@ -136,6 +142,9 @@ def timeline(store, mon, hours: float, start: float | None = None, end: float | 
         elif key == "internet_offline":
             still_bad = mon.values.get("internet") is False
             close(key, now if still_bad else start + 2, "Internet (Deco)", "wan", "problem", "brak internetu")
+        elif key == ("moca",):
+            still_bad = mon.values.get("moca_link") is False
+            close(key, now if still_bad else start + 2, "Łącze MoCA", "switch", "problem", "zerwane")
         else:
             open_.pop(key, None)
 

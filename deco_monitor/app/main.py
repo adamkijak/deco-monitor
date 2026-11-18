@@ -5,6 +5,7 @@
   * syslog głównego Deco (eksport logu, co `syslog_interval` s) -> archiwum + zdarzenia
   * lokalne API Deco (węzły mesh, backhaul, WAN, CPU/RAM, klienci)
   * switch TP-Link Easy Smart (link/ruch/błędy portów)
+  * adapter MoCA MaxLinear, np. Kiwee KB-M3-02 (łącze, PHY rate, błędy ramek)
   * ping co `ping_interval` s (internet, sieć lokalna, satelity)
 Wszystko trafia do HA przez MQTT discovery; incydenty są składane z sygnałów.
 """
@@ -30,6 +31,7 @@ from deco_api import DecoClient, DecoError, DecoTransientError, b64_name  # noqa
 from ha_ws import HAError, HomeAssistantWS  # noqa: E402
 from incidents import IncidentTracker  # noqa: E402
 from migrate import remove_false_alarms  # noqa: E402
+from moca_api import MocaAdapter, MocaError, MocaUnreachable  # noqa: E402
 from noise import NOISE_RE  # noqa: E402
 from mqtt_pub import Publisher, slugify, supervisor_mqtt  # noqa: E402
 from pinger import Pinger, ping_once  # noqa: E402
@@ -40,7 +42,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.3.9"
+VERSION = "1.4.0"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -61,7 +63,11 @@ COUNTERS = {
     "ping_outages": ("Zaniki ping", "mdi:lan-pending"),
     "switch_link_drops": ("Utraty linku na switchu", "mdi:ethernet-off"),
     "switch_resets": ("Restarty switcha", "mdi:restart-alert"),
+    "moca_link_drops": ("Zaniki łącza MoCA", "mdi:cable-data"),
 }
+
+MOCA_PHY_EVERY_S = 300  # pomiar PHY (FMR) między adapterami - rzadziej niż stan
+MOCA_RESTORE_EVERY_S = 600  # najczęściej tak często wywołujemy usługę przywracającą adres
 
 NODE_GONE_POLLS = 10  # ok. 5 min przy api_interval 30 s
 CONN_TEXT = {"wired": "kabel", "band5": "radio 5 GHz", "band2_4": "radio 2,4 GHz", "band6": "radio 6 GHz"}
@@ -250,6 +256,25 @@ class Monitor:
         self.port_rates: dict = {}
         self._switch_fails = 0
 
+        self.moca = None
+        if opts.get("moca_host"):
+            self.moca = MocaAdapter(opts["moca_host"], opts.get("moca_username") or "admin",
+                                    opts.get("moca_password") or "maxlinear")
+        self.moca_names = {}
+        for item in opts.get("moca_names") or []:
+            mac, _, name = str(item).partition("=")
+            if name.strip():
+                self.moca_names[mac.strip().lower()[-5:].replace(":", "")] = name.strip()
+        self.moca_link = None  # ostatni znany stan łącza
+        self.moca_fails = 0
+        self.moca_phy_at = 0.0
+        self.moca_phy: dict = {}  # (mac_od, mac_do) -> Mb/s
+        self.moca_phy_low: set = set()
+        self.moca_frames: dict = {}  # mac -> ostatnie liczniki
+        self.moca_rate_at: dict = {}
+        self.moca_restore_at = 0.0
+        self.moca_ping = False
+
         self.ingress_url = self._ingress_url()
         self._register_static()
 
@@ -311,6 +336,10 @@ class Monitor:
         if self.switch:
             for n in range(1, 9):
                 self._register_port(n)
+        if self.moca:
+            self.ent("moca_link", "binary_sensor", "MoCA łącze", device_class="connectivity", icon="mdi:cable-data")
+            self.ent("moca_nodes", "sensor", "MoCA adaptery", attrs=True, state_class="measurement",
+                     icon="mdi:cable-data")
         for n in self.presence.names:
             self.ent(f"presence_{slugify(n)}", "device_tracker", f"Obecność {n}", attrs=True,
                      source_type="router", payload_home="home", payload_not_home="not_home",
@@ -773,6 +802,131 @@ class Monitor:
                 self.port_rate_prev[n] = total
             self.port_rate_at = now
 
+    # ---------------------------------------------------------------- MoCA
+    def moca_label(self, mac: str) -> str:
+        tail = mac.replace(":", "")[-4:]
+        return self.moca_names.get(tail, tail)
+
+    def _restore_moca_address(self) -> None:
+        """Adapter ma stały adres w osobnej podsieci; adres hosta w tej podsieci ustawia usługa HA
+        (np. shell_command z `ip addr add`), bo dodatek nie ma dostępu do sieci HAOS."""
+        service = self.opts.get("moca_address_service")
+        token = os.environ.get("SUPERVISOR_TOKEN")
+        now = time.time()
+        if not service or not token or "." not in service or now - self.moca_restore_at < MOCA_RESTORE_EVERY_S:
+            return
+        self.moca_restore_at = now
+        import urllib.request
+
+        domain, name = service.split(".", 1)
+        req = urllib.request.Request(f"http://supervisor/core/api/services/{domain}/{name}", data=b"{}",
+                                     headers={"Authorization": f"Bearer {token}",
+                                              "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                resp.read()
+            log.info("Adapter MoCA niedostępny - wywołano %s (przywrócenie adresu)", service)
+        except Exception as exc:
+            log.warning("Nie udało się wywołać %s: %s", service, exc)
+
+    def poll_moca(self) -> None:
+        try:
+            st = self.moca.read_status()
+        except MocaError as exc:
+            self.moca_fails += 1
+            if self.moca_fails == 2:
+                log.warning("Adapter MoCA nie odpowiada: %s", exc)
+                self.status["moca"] = f"błąd: {exc}"
+            if isinstance(exc, MocaUnreachable) and self.moca_fails >= 2:
+                self._restore_moca_address()
+            return
+        if self.moca_fails >= 2:
+            log.info("Adapter MoCA znów odpowiada")
+        self.moca_fails = 0
+        self.status["moca"] = "OK"
+        now = time.time()
+        if not self.moca_ping:
+            self.moca_ping = True
+            self.add_ping_target("moca", "Adapter MoCA", self.opts["moca_host"], "local")
+        nodes = st["nodes"]
+        link = bool(st["link_up"] and len(nodes) >= 2)
+        if self.moca_link is not None and link != self.moca_link:
+            data = {"adaptery": len(nodes)}
+            if not link:
+                self.emit("moca_link_down", f"MoCA: łącze zerwane (adapterów w sieci: {len(nodes)})", "problem",
+                          now, data, counters=("moca_link_drops",))
+            else:
+                self.emit("moca_link_up", "MoCA: łącze wróciło", "info", now, data)
+        if link != self.moca_link:
+            self.set("moca_link", link)
+        self.moca_link = link
+        self.set("moca_nodes", len(nodes), {
+            "adaptery": [{"nazwa": self.moca_label(n["mac"]), "mac": n["mac"], "moca": f"{n['ver'] >> 4}.{n['ver'] & 0xf}",
+                          "zarzadza_siecia": i == st["nc_id"], "odpowiada": i == st["node_id"]}
+                         for i, n in sorted(nodes.items())],
+            "wersja_sieci": st["net_version"], "czestotliwosc_mhz": st["lof_mhz"], "kanaly": st["channels"],
+        })
+        self._moca_frames(st["mac"], st["frames"], now)
+        if link and now - self.moca_phy_at >= MOCA_PHY_EVERY_S:
+            self.moca_phy_at = now
+            try:
+                phy = self.moca.read_phy(st)
+            except MocaError as exc:
+                log.warning("Nie udało się odczytać PHY MoCA: %s", exc)
+                return
+            self._moca_phy(phy, now)
+
+    def _moca_frames(self, mac: str | None, fr: dict, now: float) -> None:
+        if not mac:
+            return
+        lab = self.moca_label(mac)
+        k = f"moca_{mac.replace(':', '')[-4:]}"
+        if f"{k}_bad" not in self.ents:
+            self.ent(f"{k}_bad", "sensor", f"MoCA {lab} Ethernet błędne ramki", state_class="total_increasing",
+                     icon="mdi:alert-circle-outline", attrs=True)
+            self.ent(f"{k}_dropped", "sensor", f"MoCA {lab} Ethernet odrzucone ramki",
+                     state_class="total_increasing", icon="mdi:package-variant-remove")
+            self.ent(f"{k}_rate", "sensor", f"MoCA {lab} Ethernet ruch", unit_of_measurement="pkt/s",
+                     state_class="measurement", icon="mdi:swap-vertical")
+        bad = fr["tx_bad"] + fr["rx_bad"]
+        dropped = fr["tx_dropped"] + fr["rx_dropped"]
+        prev = self.moca_frames.get(mac)
+        if prev:
+            pbad = prev["tx_bad"] + prev["rx_bad"]
+            pdrop = prev["tx_dropped"] + prev["rx_dropped"]
+            if bad > pbad or dropped > pdrop:
+                self.emit("moca_eth_errors", f"MoCA {lab}: błędne ramki +{max(0, bad - pbad)}, "
+                          f"odrzucone +{max(0, dropped - pdrop)} (port Ethernet adaptera)", "warning", now,
+                          {"adapter": lab, "mac": mac, "bledne": bad - pbad, "odrzucone": dropped - pdrop})
+            total = fr["tx_good"] + fr["rx_good"]
+            ptotal = prev["tx_good"] + prev["rx_good"]
+            dt = now - self.moca_rate_at.get(mac, now)
+            if dt > 0 and total >= ptotal:
+                self.set(f"{k}_rate", round((total - ptotal) / dt, 1))
+        self.set(f"{k}_bad", bad, fr)
+        self.set(f"{k}_dropped", dropped)
+        self.moca_frames[mac] = fr
+        self.moca_rate_at[mac] = now
+
+    def _moca_phy(self, phy: dict, now: float) -> None:
+        low = int(self.opts.get("moca_phy_min", 2000))
+        for (a, b), rate in phy.items():
+            la, lb = self.moca_label(a), self.moca_label(b)
+            k = f"moca_phy_{a.replace(':', '')[-4:]}_{b.replace(':', '')[-4:]}"
+            if k not in self.ents:
+                self.ent(k, "sensor", f"MoCA PHY {la} do {lb}", unit_of_measurement="Mbit/s",
+                         state_class="measurement", icon="mdi:speedometer")
+            self.set(k, rate)
+            data = {"od": la, "do": lb, "phy_mbps": rate, "prog": low}
+            if rate < low and k not in self.moca_phy_low:
+                self.moca_phy_low.add(k)
+                self.emit("moca_phy_low", f"MoCA: PHY {la} → {lb} spadło do {rate} Mb/s (próg {low})",
+                          "warning", now, data)
+            elif rate >= low and k in self.moca_phy_low:
+                self.moca_phy_low.discard(k)
+                self.emit("moca_phy_ok", f"MoCA: PHY {la} → {lb} wróciło do {rate} Mb/s", "info", now, data)
+        self.moca_phy = phy
+
     def poll_satellites(self) -> None:
         self.satlogs.poll()
         self.status["satelity"] = self.satlogs.status()
@@ -810,7 +964,7 @@ class Monitor:
 
     def _write_dashboard(self) -> None:
         sig = (tuple(sorted(self.nodes)), tuple(sorted(self.ping_meta)), bool(self.switch),
-               tuple(sorted(k for k in self.ents if k.endswith("_bh_speed"))))
+               tuple(sorted(k for k in self.ents if k.endswith("_bh_speed") or k.startswith("moca_"))))
         if sig == self._dash_sig:
             return
         self._dash_sig = sig
@@ -918,6 +1072,8 @@ class Monitor:
         ]
         if self.switch:
             loops.append(("switch", float(self.opts.get("switch_interval", 10)), self.poll_switch))
+        if self.moca:
+            loops.append(("moca", float(self.opts.get("moca_interval", 60)), self.poll_moca))
         if self.satlogs:
             # satelity bez dostępu (403) są pomijane do czasu kolejnej próby
             loops.append(("satelity", self.satlogs.interval, self.poll_satellites))

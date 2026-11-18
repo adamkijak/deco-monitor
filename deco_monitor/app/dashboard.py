@@ -250,6 +250,40 @@ def _build(mon) -> dict:
             ],
         })
 
+    if getattr(mon, "moca", None) and has("moca_link"):
+        phy = [{"entity": e[k], "name": k} for k in sorted(e) if k.startswith("moca_phy_")]
+        names = getattr(mon, "moca_names", {}) or {}
+        for item in phy:
+            a, b = item["name"].replace("moca_phy_", "").split("_", 1)
+            item["name"] = f"{names.get(a, a)} → {names.get(b, b)}"
+        bad = [e[k] for k in sorted(e) if k.startswith("moca_") and (k.endswith("_bad") or k.endswith("_dropped"))]
+        rate = [{"entity": e[k], "name": "ruch"} for k in sorted(e) if k.startswith("moca_") and k.endswith("_rate")]
+        ping = [x for x in ping_rtts if x["name"] == "Adapter MoCA"]
+        loss = [x for x in ping_loss if x["name"] == "Adapter MoCA"]
+        views.append({
+            "title": "MoCA",
+            "path": "moca",
+            "icon": "mdi:cable-data",
+            "cards": [
+                {"type": "entities", "title": "MoCA (koncentryk)", "entities":
+                    [st("moca_link"), st("moca_nodes")] + [x["entity"] for x in phy] + bad
+                    + [x["entity"] for x in rate]},
+                {"type": "markdown", "title": "Adaptery", "content":
+                    "{% for a in state_attr('" + st("moca_nodes") + "', 'adaptery') or [] %}"
+                    "- **{{ a.nazwa }}** ({{ a.mac }}, MoCA {{ a.moca }}){{ ' · zarządza siecią' if a.zarzadza_siecia }}"
+                    "{{ ' · odpytywany' if a.odpowiada }}\n{% endfor %}"
+                    "Pasmo od {{ state_attr('" + st("moca_nodes") + "', 'czestotliwosc_mhz') }} MHz, "
+                    "kanały: {{ state_attr('" + st("moca_nodes") + "', 'kanaly') }}"},
+                {"type": "history-graph", "title": "Łącze MoCA (48 h)", "hours_to_show": 48,
+                 "entities": [st("moca_link")]},
+            ] + ([_apex("PHY rate (Mb/s)", phy, span="48h", group="15min", func="min", unit="Mbit/s")] if phy else [])
+              + ([_apex("Ping adaptera (ms)", ping, unit="ms"),
+                  _apex("Strata pingu adaptera (maks. w 5 min)", loss, func="max", unit="%", chart_type="column")]
+                 if ping else [])
+              + ([{"type": "statistics-graph", "title": "Błędne/odrzucone ramki na godzinę", "days_to_show": 2,
+                   "period": "hour", "chart_type": "bar", "stat_types": ["change"], "entities": bad}] if bad else []),
+        })
+
     log_ent = st("log_line")
     views.append({
         "title": "Log",

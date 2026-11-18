@@ -9,6 +9,7 @@ i składa je w jeden obraz tego, co się dzieje w sieci:
 | **syslog satelitów** (ten sam eksport, z każdej satelity, która go udostępnia) | osobne archiwum logu każdej satelity | co 5 min |
 | **lokalne API Deco** | węzły mesh: online, kabel/radio, sygnał, prędkość kabla do satelity; WAN, CPU/RAM, liczba klientów | co 30 s |
 | **switch TP-Link Easy Smart** (TL-SG108E, TL-SG105E…) | link i prędkość portów, ruch, błędy RX, wykrywanie restartu | co 10 s |
+| **adapter MoCA** (MaxLinear, np. Kiwee KB-M3-02) | łącze, PHY rate między adapterami, błędy ramek portu Ethernet, ping | co 60 s (PHY co 5 min) |
 | **ping** | internet, główne Deco, switch i każda satelita: dostępność, opóźnienie, strata | co 2 s |
 
 Router trzyma w pamięci tylko ~10 minut logu – dodatek zapisuje go na stałe
@@ -86,6 +87,10 @@ potem Uruchom. Jeśli używasz starego dodatku *Deco Syslog Bridge* – odinstal
 | `switch_host`, `switch_username`, `switch_password` | Switch Easy Smart. Puste hasło = bez switcha. Tylko odczyt. |
 | `switch_interval` | Co ile sekund czytać porty (serwer WWW switcha jest słaby – 10 s to rozsądne minimum). |
 | `switch_port_names` | Opisy portów 1–8 (np. `Deco Poddasze`, `bedroom`, `TV`) – w zdarzeniach i na dashboardzie. |
+| `moca_host`, `moca_username`, `moca_password` | Panel adaptera MoCA (Kiwee: 192.168.144.200, `admin`/`maxlinear`). Pusty host = bez MoCA. Tylko odczyt. |
+| `moca_interval`, `moca_phy_min` | Co ile sekund czytać stan; próg PHY (Mb/s), poniżej którego jest ostrzeżenie. |
+| `moca_names` | Nazwy adapterów: `MAC=nazwa` (np. `fc:d2:b6:75:1b:9d=poddasze`). Bez nazwy: ostatnie 4 znaki MAC. |
+| `moca_address_service` | Usługa HA, która dodaje HAOS adres w podsieci adaptera (np. `shell_command.moca_adres` z `ip addr add 192.168.144.11/24 dev enp6s18`). Wywoływana, gdy adapter nie odpowiada. |
 | `ping_interval` | Co ile sekund pingować (zanik = 2 kolejne pingi bez odpowiedzi). |
 | `ping_targets` | Cele pingu: `name`, `host`, `kind` (`internet` / `local` / `mesh`). |
 | `ping_mesh_nodes` | Automatycznie pinguj wszystkie satelity Deco (adresy z API). |

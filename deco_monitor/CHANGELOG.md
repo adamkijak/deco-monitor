@@ -1,5 +1,19 @@
 # Zmiany
 
+## 1.4.0
+
+- **Adapter MoCA (MaxLinear, np. Kiwee KB-M3-02).** Opcja `moca_host` (adres panelu adaptera, domyślnie
+  192.168.144.200) włącza odczyt co `moca_interval` s, tylko do odczytu, tymi samymi zapytaniami co panel WWW:
+  `binary_sensor.deco_monitor_moca_lacze`, `sensor.deco_monitor_moca_adaptery` (atrybuty: adaptery, MAC, wersja,
+  który zarządza siecią, pasmo, kanały), PHY rate między adapterami w obie strony (co 5 min, Mb/s), liczniki
+  portu Ethernet odpytywanego adaptera (błędne i odrzucone ramki, ruch) oraz ping do adaptera. Zdarzenia: zerwanie
+  i powrót łącza (incydent „Zanik łącza MoCA”, licznik „Zaniki łącza MoCA”), PHY poniżej `moca_phy_min`
+  (ostrzeżenie), przyrost błędnych ramek. Nazwy adapterów: `moca_names` (`fc:d2:b6:75:1b:9d=poddasze`).
+  Nowa zakładka „MoCA” na pulpicie i pas „Łącze MoCA” na osi czasu.
+- Adapter ma stały adres w osobnej podsieci, a dodatek nie może zmienić sieci HAOS. Adres HAOS w tej podsieci
+  ustawia usługa HA podana w `moca_address_service` (np. `shell_command` z `ip addr add`); dodatek wywołuje ją,
+  gdy adapter nie odpowiada (najczęściej co 10 min).
+
 ## 1.3.9
 
 - **Obecność bez przerw przy restarcie dodatku.** Trackery obecności nie zależą już od dostępności dodatku

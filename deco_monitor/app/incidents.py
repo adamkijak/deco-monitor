@@ -149,6 +149,8 @@ def summarize(inc: dict, internet_targets: set | None = None) -> dict:
         cause = "Sieć lokalna niedostępna: " + ", ".join(sorted({i["data"].get("name", "?") for i in pings("local")}))
     elif "switch_port_down" in tset:
         cause = "Utrata linku na switchu"
+    elif "moca_link_down" in tset:
+        cause = "Zanik łącza MoCA (koncentryk)"
     elif pings("mesh"):
         cause = "Satelita niedostępna: " + ", ".join(sorted({i["data"].get("name", "?") for i in pings("mesh")}))
     elif "backhaul_radio_start" in tset:

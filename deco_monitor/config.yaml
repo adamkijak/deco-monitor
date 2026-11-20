@@ -1,5 +1,5 @@
 name: Deco Monitor
-version: "1.4.0"
+version: "1.4.1"
 slug: deco_monitor
 description: >-
   Monitoring sieci TP-Link Deco: archiwum syslogu (główny Deco i satelity), zdarzenia (zaniki WAN, utrata
@@ -67,6 +67,8 @@ options:
   log_retention_days: 30
   presence: []
   presence_away_minutes: 5
+  presence_night: []
+  presence_night_hours: "23:00-07:00"
   auto_dashboard: true
   log_level: info
 schema:
@@ -101,6 +103,9 @@ schema:
   presence:
     - str
   presence_away_minutes: int(1,60)
+  presence_night:
+    - str
+  presence_night_hours: match(^\d{1,2}:\d{2}-\d{1,2}:\d{2}$)
   auto_dashboard: bool
   log_level: list(debug|info|warning)
   mqtt_host: str?

@@ -207,8 +207,11 @@ class Monitor:
         self.incidents.internet_targets = lambda: {m["name"] for m in self.ping_meta.values()
                                                    if m["kind"] == "internet"}
         self.presence = Presence(opts.get("presence") or [],
-                                 60 * float(opts.get("presence_away_minutes", 5)))
+                                 60 * float(opts.get("presence_away_minutes", 5)),
+                                 night_names=opts.get("presence_night") or [],
+                                 night_hours=opts.get("presence_night_hours") or "23:00-07:00")
         self._presence_saved_at = 0.0
+        self._presence_night: dict = {}
         self.pinger = Pinger(float(opts.get("ping_interval", 2)), 2, self._ping_change)
 
         self.counters = load_json(os.path.join(self.data_dir, "counters.json"), {})
@@ -642,6 +645,10 @@ class Monitor:
                 changed = True
                 log.info("Obecność %s: %s%s", n, state,
                          " (poza listą Deco, odpowiada na ping)" if "odpowiada_na_ping" in attrs else "")
+            hold = bool(attrs.get("noc_zakladamy_dom"))
+            if hold and not self._presence_night.get(n):
+                log.info("Obecność %s: poza listą Deco, w nocy zostaje home", n)
+            self._presence_night[n] = hold
             for a in ("ostatnio_widziany", "odpowiada_na_ping"):
                 if a in attrs:
                     attrs[a] = datetime.fromtimestamp(attrs[a]).isoformat(timespec="seconds")

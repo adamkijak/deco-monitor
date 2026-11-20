@@ -80,6 +80,50 @@ class PresenceTest(unittest.TestCase):
         self.assertEqual(r.last_seen, {})
         r.load(None)
 
+    # -- noc -------------------------------------------------------------
+    @staticmethod
+    def _t(h, m=0):
+        import time
+        return time.mktime((2026, 11, 20, h, m, 0, 0, 0, -1))
+
+    def test_night_keeps_home(self):
+        p = Presence(["OnePlus-15"], away_after=300, night_names=["oneplus-15"], night_hours="23:00-07:00")
+        p.update([{**PHONE, "name": "OnePlus-15"}], self._t(2, 0))
+        out = p.update([OTHER], self._t(4, 0), lambda ip: False)["OnePlus-15"]
+        self.assertEqual(out[0], "home")  # 2 h poza listą, bez pingu
+        self.assertTrue(out[1]["noc_zakladamy_dom"])
+        self.assertEqual(p.update([OTHER], self._t(6, 59))["OnePlus-15"][0], "home")
+        self.assertEqual(p.update([OTHER], self._t(7, 0))["OnePlus-15"][0], "not_home")  # koniec nocy
+
+    def test_night_arrival_and_away_stays_away(self):
+        p = Presence(["OnePlus-15"], away_after=300, night_names=["OnePlus-15"])
+        p.update([{**PHONE, "name": "OnePlus-15"}], self._t(20, 0))
+        self.assertEqual(p.update([OTHER], self._t(21, 0))["OnePlus-15"][0], "not_home")  # wyszła wieczorem
+        self.assertEqual(p.update([OTHER], self._t(23, 30))["OnePlus-15"][0], "not_home")  # noc nie daje home
+        self.assertEqual(p.update([{**PHONE, "name": "OnePlus-15"}], self._t(1, 0))["OnePlus-15"][0], "home")
+        self.assertEqual(p.update([OTHER], self._t(3, 0))["OnePlus-15"][0], "home")
+
+    def test_night_only_for_listed_names(self):
+        p = Presence(["OnePlus-13"], away_after=300, night_names=["OnePlus-15"])
+        p.update([PHONE], self._t(2, 0))
+        self.assertEqual(p.update([OTHER], self._t(3, 0))["OnePlus-13"][0], "not_home")
+
+    def test_night_state_survives_restart(self):
+        p = Presence(["OnePlus-15"], night_names=["OnePlus-15"])
+        p.update([{**PHONE, "name": "OnePlus-15"}], self._t(23, 10))
+        q = Presence(["OnePlus-15"], night_names=["OnePlus-15"])
+        q.load(p.export())
+        self.assertEqual(q.update([OTHER], self._t(2, 0))["OnePlus-15"][0], "home")
+
+    def test_night_window(self):
+        p = Presence(["x"], night_names=["x"], night_hours="01:00-05:30")
+        self.assertTrue(p.is_night(self._t(5, 29)))
+        self.assertFalse(p.is_night(self._t(5, 30)))
+        self.assertFalse(p.is_night(self._t(0, 59)))
+        q = Presence(["x"], night_names=["x"])
+        self.assertTrue(q.is_night(self._t(23, 0)) and q.is_night(self._t(6, 59)))
+        self.assertFalse(q.is_night(self._t(7, 0)) or q.is_night(self._t(22, 59)))
+
     def test_offline_client_ignored(self):
         p = Presence(["OnePlus-13"])
         self.assertEqual(p.update([{**PHONE, "online": False}], 1000)["OnePlus-13"][0], "not_home")

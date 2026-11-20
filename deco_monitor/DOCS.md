@@ -100,6 +100,8 @@ potem Uruchom. Jeśli używasz starego dodatku *Deco Syslog Bridge* – odinstal
 | `log_retention_days` | Ile dni trzymać archiwum logów i historii pomiarów. |
 | `presence` | Nazwy klientów z listy Deco (np. `OnePlus-13`), dla których tworzyć tracker obecności. Bez rozróżniania wielkości liter. |
 | `presence_away_minutes` | Po ilu minutach nieobecności na liście klientów tracker przechodzi w `not_home` (domyślnie 5). Wcześniej dodatek pinguje ostatni IP telefonu i przy odpowiedzi czeka kolejne tyle samo (najwyżej 30 min od ostatniego widzenia na liście). |
+| `presence_night` | Nazwy z `presence`, dla których w nocy zakładamy obecność: telefon, który był `home`, zostaje `home` do końca okna `presence_night_hours`, nawet gdy zniknie z listy i nie odpowiada na ping (uśpiony telefon potrafi wyłączyć WiFi na ponad godzinę). Przyjście w nocy działa normalnie, a kto wieczorem był `not_home`, ten nim zostaje. Atrybut `noc_zakladamy_dom` pokazuje, że stan wynika z tej reguły. |
+| `presence_night_hours` | Okno nocy dla `presence_night`, czas lokalny, `HH:MM-HH:MM` (domyślnie `23:00-07:00`). |
 | `auto_dashboard` | Sam twórz i aktualizuj pulpit „Sieć Deco” w HA. |
 | `mqtt_*` | Tylko gdy broker MQTT nie jest dodatkiem HA. |
 

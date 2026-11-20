@@ -1,5 +1,13 @@
 # Zmiany
 
+## 1.4.1
+
+- **Obecność w nocy.** Nowe opcje `presence_night` (lista nazw z `presence`) i `presence_night_hours`
+  (domyślnie `23:00-07:00`). W tym oknie telefon, który był `home`, zostaje `home`, nawet gdy zniknie z listy
+  Deco i nie odpowiada na ping: uśpiony OnePlus-15 wyłącza WiFi nocą na 12–40 min, nie odpowiada wtedy ani na
+  ping, ani na ARP (pomiar 19/20.11). Przyjście w nocy działa od razu, a po końcu okna wraca zwykła reguła.
+  Atrybut `noc_zakladamy_dom`, ostatni stan zapisany w `state.json` (przetrwa restart dodatku).
+
 ## 1.4.0
 
 - **Adapter MoCA (MaxLinear, np. Kiwee KB-M3-02).** Opcja `moca_host` (adres panelu adaptera, domyślnie

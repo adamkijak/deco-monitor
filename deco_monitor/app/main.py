@@ -42,7 +42,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -68,6 +68,7 @@ COUNTERS = {
 
 MOCA_PHY_EVERY_S = 300  # pomiar PHY (FMR) między adapterami - rzadziej niż stan
 MOCA_RESTORE_EVERY_S = 600  # najczęściej tak często wywołujemy usługę przywracającą adres
+MOCA_ERR_EVENT_EVERY_S = 900  # zdarzenie o błędnych ramkach najwyżej co 15 min na adapter (z sumą przyrostu)
 
 NODE_GONE_POLLS = 10  # ok. 5 min przy api_interval 30 s
 CONN_TEXT = {"wired": "kabel", "band5": "radio 5 GHz", "band2_4": "radio 2,4 GHz", "band6": "radio 6 GHz"}
@@ -173,6 +174,17 @@ def save_json(path: str, obj) -> None:
     os.replace(tmp, path)
 
 
+def parse_hosts(value) -> list:
+    """'192.168.144.200, 192.168.144.201' (albo lista) -> lista adresów bez pustych i powtórzeń."""
+    items = value if isinstance(value, (list, tuple)) else str(value or "").replace(";", ",").split(",")
+    out = []
+    for h in items:
+        h = str(h).strip()
+        if h and h not in out:
+            out.append(h)
+    return out
+
+
 class Monitor:
     def __init__(self, opts: dict):
         self.opts = opts
@@ -259,10 +271,13 @@ class Monitor:
         self.port_rates: dict = {}
         self._switch_fails = 0
 
-        self.moca = None
-        if opts.get("moca_host"):
-            self.moca = MocaAdapter(opts["moca_host"], opts.get("moca_username") or "admin",
-                                    opts.get("moca_password") or "maxlinear")
+        # moca_host: jeden adres albo kilka po przecinku. Pierwszy adapter daje stan sieci i PHY,
+        # z każdego zbieramy liczniki jego portu Ethernet (adapter widzi tylko swój port).
+        self.moca_hosts = parse_hosts(opts.get("moca_host"))
+        creds = (opts.get("moca_username") or "admin", opts.get("moca_password") or "maxlinear")
+        self.moca = MocaAdapter(self.moca_hosts[0], *creds) if self.moca_hosts else None
+        self.moca_extra = [MocaAdapter(h, *creds) for h in self.moca_hosts[1:]]
+        self.moca_extra_fails: dict = {}  # host -> kolejne nieudane odczyty
         self.moca_names = {}
         for item in opts.get("moca_names") or []:
             mac, _, name = str(item).partition("=")
@@ -277,6 +292,9 @@ class Monitor:
         self.moca_rate_at: dict = {}
         self.moca_restore_at = 0.0
         self.moca_ping = False
+        self.moca_pinged: set = set()  # hosty dodatkowych adapterów z celem pingu
+        self.moca_err_pending: dict = {}  # mac -> [błędne, odrzucone] jeszcze bez zdarzenia
+        self.moca_err_event_at: dict = {}  # mac -> czas ostatniego zdarzenia moca_eth_errors
 
         self.ingress_url = self._ingress_url()
         self._register_static()
@@ -854,7 +872,8 @@ class Monitor:
         now = time.time()
         if not self.moca_ping:
             self.moca_ping = True
-            self.add_ping_target("moca", "Adapter MoCA", self.opts["moca_host"], "local")
+            self.add_ping_target("moca", "Adapter MoCA", self.moca_hosts[0], "local")
+        extra = self._poll_moca_extra(now)
         nodes = st["nodes"]
         link = bool(st["link_up"] and len(nodes) >= 2)
         if self.moca_link is not None and link != self.moca_link:
@@ -869,11 +888,13 @@ class Monitor:
         self.moca_link = link
         self.set("moca_nodes", len(nodes), {
             "adaptery": [{"nazwa": self.moca_label(n["mac"]), "mac": n["mac"], "moca": f"{n['ver'] >> 4}.{n['ver'] & 0xf}",
-                          "zarzadza_siecia": i == st["nc_id"], "odpowiada": i == st["node_id"]}
+                          "zarzadza_siecia": i == st["nc_id"], "odpowiada": i == st["node_id"] or i in extra}
                          for i, n in sorted(nodes.items())],
             "wersja_sieci": st["net_version"], "czestotliwosc_mhz": st["lof_mhz"], "kanaly": st["channels"],
         })
         self._moca_frames(st["mac"], st["frames"], now)
+        for est in extra.values():
+            self._moca_frames(est["mac"], est["frames"], now)
         if link and now - self.moca_phy_at >= MOCA_PHY_EVERY_S:
             self.moca_phy_at = now
             try:
@@ -882,6 +903,31 @@ class Monitor:
                 log.warning("Nie udało się odczytać PHY MoCA: %s", exc)
                 return
             self._moca_phy(phy, now)
+
+    def _poll_moca_extra(self, now: float) -> dict:
+        """Dodatkowe adaptery (każdy z własnym adresem): {node_id: stan}. Błąd jednego nie psuje reszty."""
+        out = {}
+        for ad, host in zip(self.moca_extra, self.moca_hosts[1:]):
+            try:
+                st = ad.read_status()
+            except MocaError as exc:
+                n = self.moca_extra_fails[host] = self.moca_extra_fails.get(host, 0) + 1
+                if n == 2:
+                    log.warning("Adapter MoCA %s nie odpowiada: %s", host, exc)
+                    self.status[f"moca {host}"] = f"błąd: {exc}"
+                continue
+            if self.moca_extra_fails.get(host, 0) >= 2:
+                log.info("Adapter MoCA %s znów odpowiada", host)
+            self.moca_extra_fails[host] = 0
+            self.status[f"moca {host}"] = "OK"
+            if not st.get("mac"):
+                continue
+            if host not in self.moca_pinged:
+                self.moca_pinged.add(host)
+                tail = st["mac"].replace(":", "")[-4:]
+                self.add_ping_target(f"moca_{tail}", f"Adapter MoCA {self.moca_label(st['mac'])}", host, "local")
+            out[st["node_id"]] = st
+        return out
 
     def _moca_frames(self, mac: str | None, fr: dict, now: float) -> None:
         if not mac:
@@ -901,10 +947,17 @@ class Monitor:
         if prev:
             pbad = prev["tx_bad"] + prev["rx_bad"]
             pdrop = prev["tx_dropped"] + prev["rx_dropped"]
-            if bad > pbad or dropped > pdrop:
-                self.emit("moca_eth_errors", f"MoCA {lab}: błędne ramki +{max(0, bad - pbad)}, "
-                          f"odrzucone +{max(0, dropped - pdrop)} (port Ethernet adaptera)", "warning", now,
-                          {"adapter": lab, "mac": mac, "bledne": bad - pbad, "odrzucone": dropped - pdrop})
+            pend = self.moca_err_pending.setdefault(mac, [0, 0])
+            pend[0] += max(0, bad - pbad)  # po restarcie adaptera liczniki liczą od zera
+            pend[1] += max(0, dropped - pdrop)
+            if any(pend) and now - self.moca_err_event_at.get(mac, 0.0) >= MOCA_ERR_EVENT_EVERY_S:
+                since = self.moca_err_event_at.get(mac)
+                okres = f"w {round((now - since) / 60)} min " if since else ""
+                self.emit("moca_eth_errors", f"MoCA {lab}: {okres}błędne ramki +{pend[0]}, odrzucone +{pend[1]} "
+                          "(port Ethernet adaptera)", "warning", now,
+                          {"adapter": lab, "mac": mac, "bledne": pend[0], "odrzucone": pend[1]})
+                self.moca_err_event_at[mac] = now
+                self.moca_err_pending[mac] = [0, 0]
             total = fr["tx_good"] + fr["rx_good"]
             ptotal = prev["tx_good"] + prev["rx_good"]
             dt = now - self.moca_rate_at.get(mac, now)

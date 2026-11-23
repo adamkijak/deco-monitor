@@ -1,5 +1,14 @@
 # Zmiany
 
+## 1.4.2
+
+- **Kilka adapterów MoCA.** `moca_host` przyjmuje adresy po przecinku. Każdy adapter widzi tylko liczniki
+  własnego portu Ethernet, więc dopiero odczyt drugiego adaptera pokazuje błędy na kablu po jego stronie
+  (np. między adapterem w salonie a Deco). Dla każdego dodatkowego adaptera: błędne i odrzucone ramki, ruch
+  i ping (ten ping przechodzi przez koncentryk). Stan sieci i PHY dalej z pierwszego adresu.
+- Zdarzenie o błędnych ramkach najwyżej raz na 15 min na adapter, z sumą przyrostu (przy uszkodzonym kablu
+  przychodziło co minutę).
+
 ## 1.4.1
 
 - **Obecność w nocy.** Nowe opcje `presence_night` (lista nazw z `presence`) i `presence_night_hours`

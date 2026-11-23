@@ -257,9 +257,10 @@ def _build(mon) -> dict:
             a, b = item["name"].replace("moca_phy_", "").split("_", 1)
             item["name"] = f"{names.get(a, a)} → {names.get(b, b)}"
         bad = [e[k] for k in sorted(e) if k.startswith("moca_") and (k.endswith("_bad") or k.endswith("_dropped"))]
-        rate = [{"entity": e[k], "name": "ruch"} for k in sorted(e) if k.startswith("moca_") and k.endswith("_rate")]
-        ping = [x for x in ping_rtts if x["name"] == "Adapter MoCA"]
-        loss = [x for x in ping_loss if x["name"] == "Adapter MoCA"]
+        rate = [{"entity": e[k], "name": names.get(k[5:-5], k[5:-5])} for k in sorted(e)
+                if k.startswith("moca_") and k.endswith("_rate")]
+        ping = [x for x in ping_rtts if x["name"].startswith("Adapter MoCA")]
+        loss = [x for x in ping_loss if x["name"].startswith("Adapter MoCA")]
         views.append({
             "title": "MoCA",
             "path": "moca",

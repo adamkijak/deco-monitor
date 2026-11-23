@@ -87,7 +87,7 @@ potem Uruchom. Jeśli używasz starego dodatku *Deco Syslog Bridge* – odinstal
 | `switch_host`, `switch_username`, `switch_password` | Switch Easy Smart. Puste hasło = bez switcha. Tylko odczyt. |
 | `switch_interval` | Co ile sekund czytać porty (serwer WWW switcha jest słaby – 10 s to rozsądne minimum). |
 | `switch_port_names` | Opisy portów 1–8 (np. `Deco Poddasze`, `bedroom`, `TV`) – w zdarzeniach i na dashboardzie. |
-| `moca_host`, `moca_username`, `moca_password` | Panel adaptera MoCA (Kiwee: 192.168.144.200, `admin`/`maxlinear`). Pusty host = bez MoCA. Tylko odczyt. |
+| `moca_host`, `moca_username`, `moca_password` | Panel adaptera MoCA (Kiwee: 192.168.144.200, `admin`/`maxlinear`). Pusty host = bez MoCA. Tylko odczyt. Kilka adapterów: adresy po przecinku (`192.168.144.200, 192.168.144.201`); pierwszy daje stan sieci i PHY, z każdego są liczniki jego portu Ethernet i ping. Fabrycznie wszystkie Kiwee mają 192.168.144.200 i odpowiada tylko jeden, więc drugiemu trzeba zmienić adres w panelu (Device Setup, Static IP) i zrestartować go. |
 | `moca_interval`, `moca_phy_min` | Co ile sekund czytać stan; próg PHY (Mb/s), poniżej którego jest ostrzeżenie. |
 | `moca_names` | Nazwy adapterów: `MAC=nazwa` (np. `fc:d2:b6:75:1b:9d=poddasze`). Bez nazwy: ostatnie 4 znaki MAC. |
 | `moca_address_service` | Usługa HA, która dodaje HAOS adres w podsieci adaptera (np. `shell_command.moca_adres` z `ip addr add 192.168.144.11/24 dev enp6s18`). Wywoływana, gdy adapter nie odpowiada. |

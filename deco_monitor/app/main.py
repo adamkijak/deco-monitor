@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -42,7 +43,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -167,11 +168,25 @@ DASH_URL = "siec-deco"
 
 
 
+_SAVE_LOCK = threading.Lock()
+
+
 def save_json(path: str, obj) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(obj, fh, ensure_ascii=False)
-    os.replace(tmp, path)
+    """Zapis atomowy. Wywoływany z kilku wątków (np. równoczesne zmiany pingu), więc każdy zapis ma
+    własny plik tymczasowy, a blokada pilnuje, żeby starszy stan nie nadpisał nowszego."""
+    with _SAVE_LOCK:
+        fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp",
+                                   dir=os.path.dirname(path) or ".")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(obj, fh, ensure_ascii=False)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def parse_hosts(value) -> list:
@@ -227,6 +242,7 @@ class Monitor:
         self.pinger = Pinger(float(opts.get("ping_interval", 2)), 2, self._ping_change)
 
         self.counters = load_json(os.path.join(self.data_dir, "counters.json"), {})
+        self._counters_lock = threading.Lock()
         self.persist = load_json(os.path.join(self.data_dir, "state.json"), {})
         self._persist_lock = threading.Lock()
         self.presence.load(self.persist.get("presence"))
@@ -502,9 +518,16 @@ class Monitor:
 
     # -------------------------------------------------------------- zdarzenia
     def bump(self, key: str) -> None:
-        self.counters[key] = int(self.counters.get(key, 0)) + 1
-        self.set(f"cnt_{key}", self.counters[key])
-        save_json(os.path.join(self.data_dir, "counters.json"), self.counters)
+        # emit() przychodzi też z równoległych wątków pingu: bez blokady ginęły zwiększenia licznika
+        with self._counters_lock:
+            self.counters[key] = int(self.counters.get(key, 0)) + 1
+            value = self.counters[key]
+            save_json(os.path.join(self.data_dir, "counters.json"), self.counters)
+        self.set(f"cnt_{key}", value)
+
+    def counters_copy(self) -> dict:
+        with self._counters_lock:
+            return dict(self.counters)
 
     def emit(self, etype: str, message: str, severity: str, ts: float, data: dict | None = None,
              states: dict | None = None, counters=(), delay_to: float | None = None,
@@ -1103,7 +1126,7 @@ class Monitor:
             "pings": pings,
             "ports": [{**p, "label": self.port_labels.get(n), "rate": self.port_rates.get(n)}
                       for n, p in sorted(self.port_prev.items())],
-            "counters": self.counters,
+            "counters": self.counters_copy(),
             "last_incident": self.values.get("last_incident"),
         }
 

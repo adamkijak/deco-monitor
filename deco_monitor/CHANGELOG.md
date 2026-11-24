@@ -1,5 +1,12 @@
 # Zmiany
 
+## 1.4.3
+
+- **Poprawka: równoczesne zdarzenia z pingu.** Gdy kilka celów pingu zmieniało stan w tej samej chwili (np. zanik
+  łącza MoCA), wątki zapisywały liczniki przez ten sam plik `counters.json.tmp`. Jeden z nich kończył się błędem
+  `FileNotFoundError`, a jego zdarzenie „brak odpowiedzi” i zwiększenie licznika przepadały. Teraz każdy zapis
+  ma własny plik tymczasowy, zapisy idą po kolei, a liczniki zwiększa się pod blokadą.
+
 ## 1.4.2
 
 - **Kilka adapterów MoCA.** `moca_host` przyjmuje adresy po przecinku. Każdy adapter widzi tylko liczniki

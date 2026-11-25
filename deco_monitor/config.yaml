@@ -1,5 +1,5 @@
 name: Deco Monitor
-version: "1.4.3"
+version: "1.4.4"
 slug: deco_monitor
 description: >-
   Monitoring sieci TP-Link Deco: archiwum syslogu (główny Deco i satelity), zdarzenia (zaniki WAN, utrata
@@ -44,6 +44,7 @@ options:
   moca_password: maxlinear
   moca_interval: 60
   moca_phy_min: 2000
+  moca_err_warn: 10
   moca_names: []
   moca_address_service: ""
   ping_interval: 2
@@ -87,6 +88,7 @@ schema:
   moca_password: password?
   moca_interval: int(10,600)
   moca_phy_min: int(0,5000)
+  moca_err_warn: int(1,100000)?
   moca_names:
     - str
   moca_address_service: str?

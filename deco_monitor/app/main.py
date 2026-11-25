@@ -43,7 +43,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.4.3"
+VERSION = "1.4.4"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -69,7 +69,8 @@ COUNTERS = {
 
 MOCA_PHY_EVERY_S = 300  # pomiar PHY (FMR) między adapterami - rzadziej niż stan
 MOCA_RESTORE_EVERY_S = 600  # najczęściej tak często wywołujemy usługę przywracającą adres
-MOCA_ERR_EVENT_EVERY_S = 900  # zdarzenie o błędnych ramkach najwyżej co 15 min na adapter (z sumą przyrostu)
+MOCA_ERR_EVENT_EVERY_S = 900  # okno liczenia błędnych ramek; ostrzeżenie najwyżej co 15 min na adapter
+MOCA_ERR_SUMMARY_EVERY_S = 3600  # pojedyncze błędy poniżej progu: jedno podsumowanie (info) na godzinę
 
 NODE_GONE_POLLS = 10  # ok. 5 min przy api_interval 30 s
 CONN_TEXT = {"wired": "kabel", "band5": "radio 5 GHz", "band2_4": "radio 2,4 GHz", "band6": "radio 6 GHz"}
@@ -309,8 +310,14 @@ class Monitor:
         self.moca_restore_at = 0.0
         self.moca_ping = False
         self.moca_pinged: set = set()  # hosty dodatkowych adapterów z celem pingu
-        self.moca_err_pending: dict = {}  # mac -> [błędne, odrzucone] jeszcze bez zdarzenia
-        self.moca_err_event_at: dict = {}  # mac -> czas ostatniego zdarzenia moca_eth_errors
+        # Błędne ramki: ostrzeżenie, gdy w oknie 15 min przybędzie >= moca_err_warn; mniejsze przyrosty
+        # zbieramy i podajemy raz na godzinę jako informację (pojedyncze błędy na kablu dawały zdarzenie co 15 min).
+        self.moca_err_warn = max(1, int(opts.get("moca_err_warn") or 10))
+        self.moca_err_pending: dict = {}  # mac -> [błędne, odrzucone] w bieżącym oknie
+        self.moca_err_win_at: dict = {}  # mac -> początek bieżącego okna
+        self.moca_err_event_at: dict = {}  # mac -> czas ostatniego ostrzeżenia moca_eth_errors
+        self.moca_err_low: dict = {}  # mac -> [błędne, odrzucone] poniżej progu, jeszcze bez podsumowania
+        self.moca_err_low_at: dict = {}  # mac -> początek okresu podsumowania
 
         self.ingress_url = self._ingress_url()
         self._register_static()
@@ -967,20 +974,14 @@ class Monitor:
         bad = fr["tx_bad"] + fr["rx_bad"]
         dropped = fr["tx_dropped"] + fr["rx_dropped"]
         prev = self.moca_frames.get(mac)
+        self.moca_err_win_at.setdefault(mac, now)
         if prev:
             pbad = prev["tx_bad"] + prev["rx_bad"]
             pdrop = prev["tx_dropped"] + prev["rx_dropped"]
             pend = self.moca_err_pending.setdefault(mac, [0, 0])
-            pend[0] += max(0, bad - pbad)  # po restarcie adaptera liczniki liczą od zera
+            pend[0] += max(0, bad - pbad)  # liczniki zerują się przy restarcie adaptera i zestawieniu łącza
             pend[1] += max(0, dropped - pdrop)
-            if any(pend) and now - self.moca_err_event_at.get(mac, 0.0) >= MOCA_ERR_EVENT_EVERY_S:
-                since = self.moca_err_event_at.get(mac)
-                okres = f"w {round((now - since) / 60)} min " if since else ""
-                self.emit("moca_eth_errors", f"MoCA {lab}: {okres}błędne ramki +{pend[0]}, odrzucone +{pend[1]} "
-                          "(port Ethernet adaptera)", "warning", now,
-                          {"adapter": lab, "mac": mac, "bledne": pend[0], "odrzucone": pend[1]})
-                self.moca_err_event_at[mac] = now
-                self.moca_err_pending[mac] = [0, 0]
+            self._moca_err_events(mac, lab, now)
             total = fr["tx_good"] + fr["rx_good"]
             ptotal = prev["tx_good"] + prev["rx_good"]
             dt = now - self.moca_rate_at.get(mac, now)
@@ -990,6 +991,40 @@ class Monitor:
         self.set(f"{k}_dropped", dropped)
         self.moca_frames[mac] = fr
         self.moca_rate_at[mac] = now
+
+    def _moca_err_events(self, mac: str, lab: str, now: float) -> None:
+        warn = self.moca_err_warn
+        pend = self.moca_err_pending[mac]
+        win_at = self.moca_err_win_at[mac]
+        last = self.moca_err_event_at.get(mac)
+        data = {"adapter": lab, "mac": mac}
+        if sum(pend) >= warn:
+            if last is None or now - last >= MOCA_ERR_EVENT_EVERY_S:
+                mins = round((now - win_at) / 60)
+                okres = f"w {mins} min " if mins else ""
+                self.emit("moca_eth_errors", f"MoCA {lab}: {okres}błędne ramki +{pend[0]}, odrzucone +{pend[1]} "
+                          "(port Ethernet adaptera)", "warning", now,
+                          {**data, "bledne": pend[0], "odrzucone": pend[1], "prog": warn})
+                self.moca_err_event_at[mac] = now
+                self.moca_err_pending[mac] = [0, 0]
+                self.moca_err_win_at[mac] = now
+            # powyżej progu, ale ostrzeżenie było przed chwilą: okno rośnie do następnego ostrzeżenia
+        elif now - win_at >= MOCA_ERR_EVENT_EVERY_S:
+            if any(pend):
+                low = self.moca_err_low.setdefault(mac, [0, 0])
+                if not any(low):
+                    self.moca_err_low_at[mac] = win_at
+                low[0] += pend[0]
+                low[1] += pend[1]
+            self.moca_err_pending[mac] = [0, 0]
+            self.moca_err_win_at[mac] = now
+        low = self.moca_err_low.get(mac)
+        if low and any(low) and now - self.moca_err_low_at[mac] >= MOCA_ERR_SUMMARY_EVERY_S:
+            mins = round((now - self.moca_err_low_at[mac]) / 60)
+            self.emit("moca_eth_errors", f"MoCA {lab}: w {mins} min pojedyncze błędne ramki +{low[0]}, odrzucone "
+                      f"+{low[1]} (port Ethernet adaptera, poniżej progu {warn} na 15 min)", "info", now,
+                      {**data, "bledne": low[0], "odrzucone": low[1], "prog": warn})
+            self.moca_err_low[mac] = [0, 0]
 
     def _moca_phy(self, phy: dict, now: float) -> None:
         low = int(self.opts.get("moca_phy_min", 2000))

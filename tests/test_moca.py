@@ -87,7 +87,7 @@ class MocaTwoAdaptersTest(unittest.TestCase):
         self.b = FakeAdapter(1, "02:00:00:00:1c:62")
         self.mon.moca, self.mon.moca_extra = self.a, [self.b]
         self.events = []
-        self.mon.emit = lambda etype, msg, *a, **k: self.events.append((etype, msg))
+        self.mon.emit = lambda etype, msg, sev, *a, **k: self.events.append((etype, msg, sev))
 
     def test_hosts(self):
         self.assertEqual(self.mon.moca_hosts, ["192.168.144.200", "192.168.144.201"])
@@ -117,14 +117,14 @@ class MocaTwoAdaptersTest(unittest.TestCase):
                 t[0] += 60
                 self.b.fr = frames(rx_bad=bad, good=1000 * (i + 1))
                 self.mon.poll_moca()
-            errs = [m for e, m in self.events if e == "moca_eth_errors"]
+            errs = [m for e, m, _ in self.events if e == "moca_eth_errors"]
             self.assertEqual(len(errs), 1)
-            self.assertIn("salon: błędne ramki +67", errs[0])
+            self.assertIn("salon: w 1 min błędne ramki +67", errs[0])
             self.assertEqual(self.mon.values["moca_1c62_bad"], 201)
             t[0] += main.MOCA_ERR_EVENT_EVERY_S
             self.b.fr = frames(rx_bad=210, good=5000)
             self.mon.poll_moca()
-            errs = [m for e, m in self.events if e == "moca_eth_errors"]
+            errs = [m for e, m, _ in self.events if e == "moca_eth_errors"]
             self.assertEqual(len(errs), 2)
             self.assertIn("w 17 min błędne ramki +143", errs[1])  # +67 +67 po pierwszym zdarzeniu (t=1060) i +9 (t=2080)
             self.b.down = True  # drugi adapter milczy: pierwszy dalej działa
@@ -134,6 +134,79 @@ class MocaTwoAdaptersTest(unittest.TestCase):
             self.assertIn("błąd", self.mon.status["moca 192.168.144.201"])
         finally:
             main.time = real
+
+    def _clock(self, t):
+        real = main.time
+
+        class Clock:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            @staticmethod
+            def time():
+                return t[0]
+
+        main.time = Clock()
+        self.addCleanup(setattr, main, "time", real)
+
+    def _run(self, t, bads, step=60):
+        """Kolejne odczyty co step s z podanym licznikiem błędnych ramek salonu."""
+        for bad in bads:
+            t[0] += step
+            self.b.fr = frames(rx_bad=bad, good=int(t[0]))
+            self.mon.poll_moca()
+
+    def test_single_errors_hourly_summary(self):
+        t = [1000.0]
+        self._clock(t)
+        self.mon.poll_moca()
+        bads, n = [], 0
+        for i in range(180):  # 3 h, pojedyncza błędna ramka co 10 min (jak po wymianie kabla 24.11)
+            if i % 10 == 5:
+                n += 1
+            bads.append(n)
+        self._run(t, bads)
+        errs = [(m, sev) for e, m, sev in self.events if e == "moca_eth_errors"]
+        self.assertTrue(errs)
+        self.assertTrue(all(sev == "info" for _, sev in errs), errs)
+        self.assertLessEqual(len(errs), 3)  # najwyżej jedno na godzinę (wcześniej co 15 min = 12)
+        self.assertIn("pojedyncze błędne ramki +", errs[0][0])
+        self.assertIn("poniżej progu 10 na 15 min", errs[0][0])
+        total = sum(int(m.split("ramki +")[1].split(",")[0]) for m, _ in errs)
+        self.assertLessEqual(total, n)
+        self.assertGreaterEqual(total, n - 2)  # reszta czeka w bieżącym oknie / do następnego podsumowania
+
+    def test_burst_warns_at_once(self):
+        t = [1000.0]
+        self._clock(t)
+        self.mon.poll_moca()
+        self._run(t, [1, 1, 2, 2, 2])  # mało: bez zdarzenia
+        self.assertFalse([e for e in self.events if e[0] == "moca_eth_errors"])
+        self._run(t, [23])  # +21 w minutę (13:53 25.11)
+        errs = [(m, sev) for e, m, sev in self.events if e == "moca_eth_errors"]
+        self.assertEqual(len(errs), 1)
+        self.assertEqual(errs[0][1], "warning")
+        self.assertIn("w 6 min błędne ramki +23", errs[0][0])
+        self._run(t, [30, 45])  # dalej dużo, ale ostrzeżenie najwyżej co 15 min
+        self.assertEqual(len([e for e in self.events if e[0] == "moca_eth_errors"]), 1)
+        self._run(t, [45] * 13)
+        errs = [(m, sev) for e, m, sev in self.events if e == "moca_eth_errors"]
+        self.assertEqual(len(errs), 2)
+        self.assertEqual(errs[1][1], "warning")
+        self.assertIn("w 15 min błędne ramki +22", errs[1][0])
+
+    def test_threshold_option(self):
+        self.mon.moca_err_warn = 1  # moca_err_warn: 1 = ostrzeżenie przy każdej błędnej ramce (jak do 1.4.3)
+        t = [1000.0]
+        self._clock(t)
+        self.mon.poll_moca()
+        self._run(t, [1])
+        errs = [(m, sev) for e, m, sev in self.events if e == "moca_eth_errors"]
+        self.assertEqual(errs, [("MoCA salon: w 1 min błędne ramki +1, odrzucone +0 (port Ethernet adaptera)",
+                                 "warning")])
+        mon = main.Monitor({"deco_host": "127.0.0.1", "deco_password": "x", "ping_targets": [],
+                            "moca_err_warn": None})
+        self.assertEqual(mon.moca_err_warn, 10)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,14 @@
 # Zmiany
 
+## 1.4.4
+
+- **Mniej zdarzeń o błędnych ramkach MoCA.** Ostrzeżenie `moca_eth_errors` dopiero, gdy w oknie 15 min
+  przybędzie co najmniej `moca_err_warn` błędnych i odrzuconych ramek (domyślnie 10), od razu po przekroczeniu
+  progu i dalej najwyżej co 15 min. Mniejsze przyrosty (pojedyncze błędy na kablu) są zbierane i podawane raz na
+  godzinę jako informacja z sumą. Wcześniej każdy przyrost, nawet o 1, dawał ostrzeżenie, więc przy resztkowych
+  błędach na kablu było ono co 15–30 min (25.11: 28 z 39 zdarzeń). `moca_err_warn: 1` przywraca dawne
+  zachowanie. Liczniki w HA bez zmian.
+
 ## 1.4.3
 
 - **Poprawka: równoczesne zdarzenia z pingu.** Gdy kilka celów pingu zmieniało stan w tej samej chwili (np. zanik

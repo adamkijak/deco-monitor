@@ -121,8 +121,8 @@ def _build(mon) -> dict:
         parent = e.get(f"node_{name}_parent")
         if parent:
             secondary = f"→ {{{{ states('{parent}') }}}} · " + secondary
-        if sig:
-            secondary += f" · {{{{ states('{sig}') }}}} dBm"
+        if sig:  # na kablu sygnał jest unknown - wtedy bez "unknown dBm"
+            secondary += f"{{% if is_number(states('{sig}')) %}} · {{{{ states('{sig}') }}}} dBm{{% endif %}}"
         speed = e.get(f"node_{name}_bh_speed")
         if speed:
             secondary += f" · {{{{ states('{speed}') }}}} Mbit/s"

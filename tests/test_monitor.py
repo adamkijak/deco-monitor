@@ -435,6 +435,50 @@ class RemovedNodeTest(unittest.TestCase):
 
 
 
+class NodeSignalTest(unittest.TestCase):
+    """1.4.5: satelita na kablu ma sygnał unknown, a nie ostatnią wartość z radia (28.11 salon: -84 dBm)."""
+
+    @staticmethod
+    def _fake(ents):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        import main
+        fake = SimpleNamespace(ents=dict(ents), values={}, pub=mock.Mock(), ent=mock.Mock())
+        fake.set = lambda key, value, attrs=None: main.Monitor.set(fake, key, value, attrs)
+        return fake, main
+
+    SIG = {"node_living_room_signal": "sensor.deco_monitor_living_room_sygnal"}
+
+    def test_wired_online_publishes_unknown(self):
+        fake, main = self._fake(self.SIG)
+        main.Monitor._set_node_signal(fake, "living_room", {"signal_dbm": None, "online": True, "wired": True})
+        fake.pub.state.assert_called_once_with("sensor.deco_monitor_living_room_sygnal", "None")
+
+    def test_radio_publishes_dbm(self):
+        fake, main = self._fake(self.SIG)
+        main.Monitor._set_node_signal(fake, "living_room", {"signal_dbm": -84, "online": True, "wired": False})
+        fake.pub.state.assert_called_once_with("sensor.deco_monitor_living_room_sygnal", -84)
+
+    def test_offline_keeps_last_value(self):
+        fake, main = self._fake(self.SIG)
+        main.Monitor._set_node_signal(fake, "living_room", {"signal_dbm": None, "online": False, "wired": True})
+        fake.pub.state.assert_not_called()
+
+    def test_without_entity_nothing_published(self):
+        fake, main = self._fake({})
+        main.Monitor._set_node_signal(fake, "Poddasze", {"signal_dbm": None, "online": True, "wired": True})
+        fake.pub.state.assert_not_called()
+
+    def test_wired_satellite_gets_signal_entity_master_does_not(self):
+        fake, main = self._fake({})
+        main.Monitor._register_node(fake, "living_room", False, False)
+        main.Monitor._register_node(fake, "Poddasze", True, False)
+        keys = [c.args[0] for c in fake.ent.call_args_list]
+        self.assertIn("node_living_room_signal", keys)
+        self.assertNotIn("node_Poddasze_signal", keys)
+
+
 class NodeOfflineTest(unittest.TestCase):
     """1.3.6: węzeł offline w device_list (16.11 kuchnia: ping działał, główne Deco nie miało SSH)."""
 

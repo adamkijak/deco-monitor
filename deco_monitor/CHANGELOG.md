@@ -1,5 +1,13 @@
 # Zmiany
 
+## 1.4.5
+
+- **Sygnał satelity na kablu = „nieznany”.** Deco podaje sygnał radiowy satelity (`signal_strength`) tylko wtedy,
+  gdy łączy się przez radio. Na kablu pole jest puste, a encja „<satelita> sygnał” trzymała ostatnią wartość
+  z radia (28.11 salon na kablu pokazywał −84 dBm z chwilowego przejścia na radio 27.11). Teraz satelita online
+  na kablu ma w HA stan unknown, a encję sygnału ma każda satelita (także ta, która od startu dodatku jest na
+  kablu). W pulpicie dodatku dBm przy satelicie pokazuje się tylko przy liczbowej wartości.
+
 ## 1.4.4
 
 - **Mniej zdarzeń o błędnych ramkach MoCA.** Ostrzeżenie `moca_eth_errors` dopiero, gdy w oknie 15 min

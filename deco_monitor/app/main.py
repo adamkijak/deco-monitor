@@ -34,7 +34,7 @@ from incidents import IncidentTracker  # noqa: E402
 from migrate import remove_false_alarms  # noqa: E402
 from moca_api import MocaAdapter, MocaError, MocaUnreachable  # noqa: E402
 from noise import NOISE_RE  # noqa: E402
-from mqtt_pub import Publisher, slugify, supervisor_mqtt  # noqa: E402
+from mqtt_pub import UNKNOWN, Publisher, slugify, supervisor_mqtt  # noqa: E402
 from pinger import Pinger, ping_once  # noqa: E402
 from presence import Presence  # noqa: E402
 from satlogs import SatelliteLogs  # noqa: E402
@@ -43,7 +43,7 @@ from switch_api import EasySmartSwitch, SwitchError  # noqa: E402
 from syslog_parser import EVENT_TYPES, LineDeduper, LogAnalyzer, parse_line  # noqa: E402
 from webui import start_webui  # noqa: E402
 
-VERSION = "1.4.4"
+VERSION = "1.4.5"
 log = logging.getLogger("deco_monitor")
 
 COUNTERS = {
@@ -442,9 +442,20 @@ class Monitor:
             self.ent(f"node_{name}_radio", "binary_sensor", f"{name} backhaul radiowy",
                      icon="mdi:access-point")
             self.ent(f"node_{name}_parent", "sensor", f"{name} podłączony do", icon="mdi:source-branch")
-        if has_signal:
+        if has_signal or not master:  # satelita na kablu też: sygnał "nieznany" zamiast starej wartości
             self.ent(f"node_{name}_signal", "sensor", f"{name} sygnał", unit_of_measurement="dBm",
                      device_class="signal_strength", state_class="measurement")
+
+    def _set_node_signal(self, name: str, info: dict) -> None:
+        """Sygnał radiowy satelity. Na kablu Deco go nie podaje (puste signal_strength), więc encja dostaje
+        unknown. Do 1.4.4 trzymała ostatnią wartość z radia (28.11 salon na kablu: -84 dBm z 27.11)."""
+        key = f"node_{name}_signal"
+        if key not in self.ents:
+            return
+        if info["signal_dbm"] is not None:
+            self.set(key, info["signal_dbm"])
+        elif info["online"] and info["wired"]:
+            self.set(key, UNKNOWN)
 
     def _prune_missing_nodes(self, seen: set) -> None:
         """Węzeł usunięty z sieci Deco znika z device_list (offline wciąż na niej jest).
@@ -781,8 +792,7 @@ class Monitor:
                 self.set(f"node_{name}_parent", info["parent"] or "nieznany")
             if not master and self.log_state_at.get(f"radio_backhaul:{name}", 0) < recent:
                 self.set(f"node_{name}_radio", not info["wired"])
-            if sig is not None:
-                self.set(f"node_{name}_signal", sig)
+            self._set_node_signal(name, info)
             if self.opts.get("ping_mesh_nodes", True) and not master and info["ip"]:
                 self.add_ping_target(f"mesh_{slugify(name)}", f"Satelita {name}", info["ip"], "mesh")
         self._prune_missing_nodes({n["name"] for n in node_list})

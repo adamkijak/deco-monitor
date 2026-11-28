@@ -233,6 +233,43 @@ class BackhaulSpeedTest(unittest.TestCase):
         self.assertIn("node_backhaul_speed", main.EVENT_TYPES)
 
 
+class NodeSignalPollTest(unittest.TestCase):
+    """1.4.5: salon przechodzi z radia na kabel - sygnał w HA unknown, w pulpicie bez "unknown dBm"."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def test_radio_then_wired(self):
+        mon = make_monitor(self.tmp, FakeHA().url)
+        mon.nodes = {}
+        mon.deco = FakeDeco()
+        mon.satlogs = None
+        mon.emit = lambda *a, **kw: None
+        lr = node("living_room", conn=("band5",), speed=None)
+        lr["signal_strength"] = {"band5": -84}
+        mon.deco.devs = [node("Poddasze", role="master", conn=(), speed=None), lr]
+        mon.poll_api()
+        self.assertEqual(mon.values["node_living_room_signal"], -84)
+        self.assertNotIn("node_Poddasze_signal", mon.ents)
+
+        mon.deco.devs[1] = node("living_room")  # znów na kablu: Deco nie podaje signal_strength
+        mon.poll_api()
+        self.assertEqual(mon.values["node_living_room_signal"], "None")
+        cfg = json.dumps(build_config(mon, True), ensure_ascii=False)
+        sig = mon.ents["node_living_room_signal"]
+        self.assertIn(f"{{% if is_number(states('{sig}')) %}} · {{{{ states('{sig}') }}}} dBm{{% endif %}}", cfg)
+
+    def test_wired_from_start_has_unknown_signal(self):
+        mon = make_monitor(self.tmp, FakeHA().url)
+        mon.nodes = {}
+        mon.deco = FakeDeco()
+        mon.satlogs = None
+        mon.emit = lambda *a, **kw: None
+        mon.deco.devs = [node("Poddasze", role="master", conn=(), speed=None), node("living_room")]
+        mon.poll_api()
+        self.assertEqual(mon.values["node_living_room_signal"], "None")
+
+
 class ParentTopologyTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

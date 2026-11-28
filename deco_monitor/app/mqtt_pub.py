@@ -13,6 +13,8 @@ log = logging.getLogger("mqtt")
 BASE = "deco_monitor"
 DISCOVERY = "homeassistant"
 AVAIL = f"{BASE}/status"
+# ładunek "None" ustawia w HA stan encji liczbowej (sensor MQTT) na unknown
+UNKNOWN = "None"
 
 _PL = str.maketrans("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ", "acelnoszzACELNOSZZ")
 
